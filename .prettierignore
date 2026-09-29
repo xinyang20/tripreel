@@ -1,0 +1,10 @@
+node_modules
+dist/vendor
+dist/data
+tests/fixtures
+pnpm-lock.yaml
+output
+test-results
+playwright-report
+行程导入文本.txt
+licenses/

@@ -1,0 +1,37 @@
+node_modules/
+.cache/
+.DS_Store
+dist/vendor/
+行程导入文本.txt
+output/
+test-results/
+playwright-report/
+*.mp4
+*.webm
+*backup*.json
+.profiles/
+
+# Local settings and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+.npmrc
+.pnpm-store/
+
+# Personal exports and editor files
+backups/
+exports/
+private/
+*备份*.json
+*原始恢复材料*.json
+*.log
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

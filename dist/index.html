@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4f9fd" />
+    <meta
+      name="description"
+      content="记录火车与飞机行程，在三维地图上重温每一段旅途。"
+    />
+    <title>途映 · 把走过的路，映成故事</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="vendor/maplibre-gl.css" />
+    <link rel="stylesheet" href="styles.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="途映首页"
+        ><strong>途映</strong><span class="brand-en">TRIPREEL</span></a
+      >
+      <div class="top-actions">
+        <span id="save-status" class="save-status">保存在此浏览器</span
+        ><button class="text-button" id="about-button">
+          数据与说明 <span>↗</span>
+        </button>
+      </div>
+    </header>
+    <main class="workspace">
+      <aside class="journey-panel" aria-label="行程列表">
+        <div class="panel-heading">
+          <div class="eyebrow">MY JOURNEY</div>
+          <h1>我的旅程<span class="small-badge">本地</span></h1>
+          <p>把走过的路，连成故事。</p>
+        </div>
+        <div class="journey-stats">
+          <div><strong id="stat-count">0</strong><span>段行程</span></div>
+          <div>
+            <strong id="stat-distance">—</strong
+            ><span>已知轨迹公里 · 估算</span>
+          </div>
+          <div><strong id="stat-places">0</strong><span>个起止地点</span></div>
+        </div>
+        <div class="library-controls">
+          <div class="filter-primary">
+            <select id="filter-group" aria-label="旅程分组">
+              <option value="">全部旅程</option>
+              <option value="ungrouped">未分组</option></select
+            ><button id="manage-groups" class="text-button">管理分组</button>
+          </div>
+          <input
+            id="filter-search"
+            type="search"
+            placeholder="搜索车次、地点或旅程"
+            aria-label="搜索行程"
+          />
+          <details class="filter-details">
+            <summary>筛选范围 <span id="filter-summary"></span></summary>
+            <div class="filter-grid">
+              <label
+                >年份<select id="filter-year">
+                  <option value="">全部年份</option>
+                </select></label
+              ><label
+                >交通<select id="filter-mode">
+                  <option value="">全部</option>
+                  <option value="train">火车</option>
+                  <option value="flight">飞机</option>
+                </select></label
+              ><label>起始日期<input id="filter-from" type="date" /></label
+              ><label>结束日期<input id="filter-to" type="date" /></label>
+            </div>
+            <button id="clear-filters" class="text-button">清除筛选</button>
+          </details>
+          <div id="draft-banner" class="hidden">
+            <button id="open-drafts" class="text-button"></button>
+          </div>
+          <div
+            id="recovery-banner"
+            class="form-status hidden"
+            role="status"
+          ></div>
+        </div>
+        <div class="list-toolbar">
+          <span id="journey-caption">按出发时间排序</span
+          ><button id="new-journey" class="text-button hidden">退出示例</button>
+        </div>
+        <div id="bulk-toolbar" class="bulk-toolbar hidden">
+          <span id="selected-count"></span
+          ><select id="bulk-group" aria-label="将选中行程归入旅程"></select
+          ><button id="apply-group" class="text-button">归组</button
+          ><button id="clear-selection" class="text-button">取消选择</button>
+        </div>
+        <div id="trip-list" class="trip-list"></div>
+        <div class="panel-footer">
+          <button id="add-trip" class="primary wide">
+            <span>＋</span> 添加一段旅程
+          </button>
+          <div class="footer-actions">
+            <button id="import-text" class="text-button">粘贴行程文本</button
+            ><button id="demo-button" class="text-button">体验示例 ↗</button>
+          </div>
+        </div>
+      </aside>
+      <section class="map-section" aria-label="旅行轨迹三维地图">
+        <div id="map"></div>
+        <div class="map-vignette"></div>
+        <div id="map-place-labels" aria-label="地图地点标签"></div>
+        <div class="map-heading">
+          <span class="eyebrow">YOUR WORLD, IN MOTION</span>
+          <h2 id="map-title">下一站，去哪里？</h2>
+          <div id="map-subtitle">添加行程，在地图上串起每一次出发。</div>
+        </div>
+        <div class="map-tools">
+          <button id="map-more" aria-expanded="false" aria-label="更多地图工具">
+            更多
+          </button>
+          <button id="fit-map" title="查看完整旅程" aria-label="查看完整旅程">
+            ⤢</button
+          ><button
+            id="map-fullscreen"
+            title="地图全屏"
+            aria-label="地图全屏"
+            aria-pressed="false"
+          >
+            全屏</button
+          ><button
+            id="toggle-3d"
+            class="active"
+            title="切换三维视角"
+            aria-label="切换三维视角"
+            aria-pressed="true"
+          >
+            3D</button
+          ><button id="map-details" title="尝试加载在线精细底图">地图</button
+          ><button id="export-video" disabled>导出视频</button>
+        </div>
+        <div id="map-notice" class="map-notice">
+          简约底图 · 可切换在线精细地图
+        </div>
+        <div class="map-legend">
+          <span><i class="train-line"></i>🚄 火车 · 铁路曲线</span
+          ><span><i class="flight-line"></i>飞机 · 示意弧线</span>
+        </div>
+        <div id="traveller" class="traveller hidden" aria-hidden="true">
+          <div class="traveller-icon">🧑‍🚀</div>
+          <div id="traveller-label"></div>
+        </div>
+        <div class="playback" aria-label="旅程回放控制">
+          <button
+            id="collapse-playback"
+            class="text-button"
+            aria-expanded="true"
+            aria-label="收起播放面板"
+          >
+            收起
+          </button>
+          <div class="playback-top">
+            <div>
+              <span class="eyebrow">JOURNEY REPLAY</span
+              ><strong id="playback-title">准备好，再出发</strong>
+            </div>
+            <div class="playback-time">
+              <span id="current-time">— — : — —</span
+              ><span id="current-date">行程回放 · 非实时定位</span>
+            </div>
+          </div>
+          <div class="playback-controls">
+            <button
+              class="play-button"
+              id="play"
+              aria-label="播放旅程"
+              disabled
+            >
+              ▶</button
+            ><button
+              class="reset-button"
+              id="restart"
+              aria-label="从头播放"
+              disabled
+            >
+              ↺
+            </button>
+            <div class="progress-area">
+              <input
+                id="progress"
+                aria-label="旅程播放进度"
+                type="range"
+                min="0"
+                max="1000"
+                value="0"
+                disabled
+              />
+              <div class="progress-labels">
+                <span id="progress-start">起点</span
+                ><span id="progress-end">终点</span>
+              </div>
+            </div>
+            <select id="speed" aria-label="播放速度">
+              <option value="1">1×</option>
+              <option value="2">2×</option>
+              <option value="4">4×</option>
+              <option value="8">8×</option>
+              <option value="16">16×</option>
+              <option value="32">32×</option>
+              <option value="0.5">0.5×</option></select
+            ><label class="follow-label"
+              ><input type="checkbox" id="follow" checked />跟随</label
+            >
+          </div>
+        </div>
+      </section>
+    </main>
+    <dialog id="editor" aria-labelledby="editor-title">
+      <div class="dialog-heading">
+        <div>
+          <span class="eyebrow">A NEW CHAPTER</span>
+          <h2 id="editor-title">添加旅程</h2>
+        </div>
+        <button class="close" data-close="editor" aria-label="关闭">×</button>
+      </div>
+      <div class="input-tabs" role="tablist" aria-label="录入方式">
+        <button id="single-tab" role="tab" aria-selected="true" class="active">
+          逐段填写</button
+        ><button id="batch-tab" role="tab" aria-selected="false">
+          粘贴文本
+        </button>
+      </div>
+      <p id="draft-status" class="field-hint" role="status"></p>
+      <form id="trip-form" role="tabpanel" aria-labelledby="single-tab">
+        <fieldset class="transport-switch">
+          <legend class="sr-only">交通方式</legend>
+          <label
+            ><input type="radio" name="mode" value="train" checked /><span
+              >🚄 &nbsp; 火车</span
+            ></label
+          ><label
+            ><input type="radio" name="mode" value="flight" /><span
+              >✈ &nbsp; 飞机</span
+            ></label
+          >
+        </fieldset>
+        <div class="form-row">
+          <label
+            >车次 / 航班号<input
+              name="number"
+              id="trip-number"
+              placeholder="例如 G1"
+              required
+              maxlength="12"
+              autocomplete="off" /></label
+          ><label
+            >出行日期<input name="date" id="trip-date" type="date" required
+          /></label>
+        </div>
+        <button type="button" id="lookup" class="secondary wide">
+          自动查询停站与时刻 <span>↗</span>
+        </button>
+        <p class="field-hint" id="lookup-hint">
+          填写车次和乘坐日期后查询。若中途上车，查询后选择实际起止站。
+        </p>
+        <div id="lookup-status" class="form-status hidden" role="status"></div>
+        <div id="train-candidates" class="hidden">
+          <p class="field-hint" id="candidates-caption">
+            从本次查询的停靠站中选择
+          </p>
+          <div class="form-row">
+            <label>候选上车站<select id="boarding-stop"></select></label
+            ><label>候选下车站<select id="alighting-stop"></select></label>
+          </div>
+        </div>
+        <div class="form-row">
+          <label
+            >出发站 / 机场<input
+              name="from"
+              id="trip-from"
+              list="place-list"
+              placeholder="北京南"
+              required
+              autocomplete="off" /></label
+          ><label
+            >到达站 / 机场<input
+              name="to"
+              id="trip-to"
+              list="place-list"
+              placeholder="上海虹桥"
+              required
+              autocomplete="off"
+          /></label>
+        </div>
+        <datalist id="place-list"></datalist>
+        <div id="single-review"></div>
+        <details id="time-details">
+          <summary>核对时刻 · 可暂不填写</summary>
+          <div class="form-row">
+            <label
+              >出发时间<input
+                name="departure"
+                id="trip-departure"
+                type="datetime-local" /></label
+            ><label
+              >到达时间<input
+                name="arrival"
+                id="trip-arrival"
+                type="datetime-local"
+            /></label>
+          </div>
+          <p class="field-hint">
+            全部使用北京时间（UTC+8）。跨午夜到达请选择次日。
+          </p>
+        </details>
+        <details id="advanced-fields">
+          <summary>高级设置 · 途经点与手动坐标</summary>
+          <div id="train-extra">
+            <label
+              >途经站 <span class="optional">可补充或修改 · 按顺序</span
+              ><textarea
+                id="trip-via"
+                name="via"
+                rows="2"
+                placeholder="例如 沧州西、德州东、曲阜东、南京南、苏州北"
+              ></textarea>
+            </label>
+            <p class="field-hint">
+              默认采用最新车次线路；补充站点用于显示停靠位置。线路不代表当日调度记录。
+            </p>
+          </div>
+          <details id="coordinates-details">
+            <summary>地点未匹配？手动补充坐标</summary>
+            <p class="field-hint">
+              填写 WGS84 经度,纬度。途经站可写为“站名@经度,纬度”。
+            </p>
+            <div class="form-row">
+              <label
+                >出发地坐标<input
+                  id="from-coord"
+                  placeholder="116.3785,39.8652" /></label
+              ><label
+                >目的地坐标<input id="to-coord" placeholder="121.3197,31.1945"
+              /></label>
+            </div>
+          </details>
+        </details>
+        <div
+          id="form-error"
+          class="form-status error hidden"
+          role="alert"
+        ></div>
+        <div class="dialog-footer">
+          <span class="field-hint">仅保存在此浏览器</span
+          ><button class="primary" id="save-trip" type="submit">
+            确认保存行程
+          </button>
+        </div>
+      </form>
+      <section
+        id="batch-panel"
+        class="hidden"
+        role="tabpanel"
+        aria-labelledby="batch-tab"
+      >
+        <details id="batch-input" open>
+          <summary>行程文本 · 修改后重新匹配</summary>
+          <p>每行一段，写出你知道的信息，其余自动匹配。</p>
+          <p class="format-example">火车 G1 2027/1/8 北京南-上海虹桥</p>
+          <textarea
+            id="batch-text"
+            rows="7"
+            aria-label="多行行程文本"
+            placeholder="火车 G1 2027/1/8 北京南-上海虹桥&#10;飞机 CA1001 2027/1/10 北京首都-厦门高崎"
+          ></textarea>
+          <p class="field-hint">
+            支持日期前后调换、斜杠日期、起止地点连字符，以及原来的六列格式。时间可省略，跨日可写“+1
+            01:20”。先匹配，再核对保存；暂时查不到的项目会保留，只需补充缺失信息。
+          </p>
+          <div class="dialog-footer">
+            <span class="field-hint">最多 20 段 · 此步不保存</span
+            ><button id="save-batch" class="primary">自动匹配并预览 ↗</button>
+          </div>
+        </details>
+        <button id="stop-batch" class="secondary" disabled>
+          停止匹配，核对已完成项
+        </button>
+        <div id="batch-status" class="form-status hidden" role="status"></div>
+        <section id="batch-review" class="hidden" aria-label="核对批量行程">
+          <div class="batch-review-heading">
+            <h3>核对行程</h3>
+            <span id="batch-summary" class="field-hint"></span>
+          </div>
+          <p class="field-hint">
+            可直接修改站点和时刻，或取消勾选暂不添加的行程。黄色提示为参考数据或需要核对的内容。全部时间使用北京时间。
+          </p>
+          <div class="batch-tools">
+            <label
+              >显示<select id="batch-filter">
+                <option value="all">全部</option>
+                <option value="review">需核对</option>
+                <option value="pending">待补全</option>
+                <option value="duplicate">重复</option>
+              </select></label
+            ><button id="retry-batch-failed" class="text-button">
+              重试失败项</button
+            ><button id="accept-batch-reference" class="text-button">
+              确认选中参考项
+            </button>
+          </div>
+          <div id="batch-rows"></div>
+          <datalist id="batch-places"></datalist>
+          <div class="dialog-footer batch-confirm-footer">
+            <span id="batch-selection" class="field-hint"></span
+            ><button id="confirm-batch" class="primary">
+              确认保存选中行程
+            </button>
+          </div>
+        </section>
+      </section>
+    </dialog>
+    <dialog id="about" aria-labelledby="about-title">
+      <div class="dialog-heading">
+        <h2 id="about-title">数据与说明</h2>
+        <button class="close" data-close="about" aria-label="关闭">×</button>
+      </div>
+      <section class="data-actions" aria-label="备份与恢复">
+        <h3>我的本地数据</h3>
+        <p id="backup-date" class="field-hint">尚未导出备份</p>
+        <label class="check-label"
+          ><input
+            id="backup-drafts"
+            type="checkbox"
+            checked
+          />备份包含草稿</label
+        >
+        <div class="action-row">
+          <button id="export-backup" class="primary">导出完整备份</button
+          ><label class="secondary file-button"
+            >导入备份<input
+              id="import-backup"
+              type="file"
+              accept=".json,application/json" /></label
+          ><button id="review-legacy" class="secondary hidden" type="button">
+            核对旧页面修改</button
+          ><button id="export-rescue" class="secondary">
+            导出原始恢复材料
+          </button>
+        </div>
+        <div id="data-status" class="form-status hidden" role="status"></div>
+        <details>
+          <summary>待继续的草稿</summary>
+          <div id="draft-list"></div>
+        </details>
+        <details>
+          <summary>本地查询诊断</summary>
+          <button id="refresh-diagnostics" class="text-button">读取状态</button>
+          <pre id="diagnostics" class="diagnostics">
+点击读取；不会自动请求外部数据源。</pre>
+          <button id="copy-diagnostics" class="text-button">
+            复制诊断摘要
+          </button>
+        </details>
+      </section>
+      <div class="about-copy">
+        <p>
+          途映把车票、机票上的地点和时间，变成可回放的旅行故事。它不提供实时列车或飞机定位。
+        </p>
+        <h3>轨迹从哪里来</h3>
+        <p>
+          <b>火车：</b>12306 公开网页服务提供停站和计划时刻；RailGo
+          提供按车次整理的铁路线路坐标，默认采用最新可用线路并截取完整乘坐区间；停站表和时刻差异不会清空轨迹。RailGo
+          线路未区分日期，可能与当日实际调度不同。个别中间站无法匹配时保留整条曲线，最新线路本身不可用时保留旧线；有可靠停站的可确认采用“停站连线示意”，也可保存为待补全。
+        </p>
+        <p>
+          <b>飞机：</b
+          >航旅纵横公开航班查询提供机场和计划时刻；三维弧线是视觉示意，高度经过夸张，不代表实际航路与飞行高度。
+        </p>
+        <p>
+          <b>地图：</b>本地简约底图来自 Natural
+          Earth（公共领域）；铁路和站点数据 © OpenStreetMap
+          contributors，ODbL。可选精细地图由 OpenFreeMap 提供。机场数据来自
+          OurAirports（公共领域）。
+        </p>
+        <h3>数据与保存</h3>
+        <p>
+          行程保存在当前浏览器。清除网站数据、更换浏览器或更换本地网址会影响访问。查询时仅向对应服务发送车次、航班号与日期，不发送整份旅行记录。公开网页接口可能调整，未来日期也可能尚无数据；始终以出票信息为准。
+        </p>
+        <p>
+          <a
+            href="https://www.umetrip.com/weixin/aliPay/flightSearch.html"
+            target="_blank"
+            rel="noreferrer"
+            >航旅纵横查询 ↗</a
+          >
+          ·
+          <a href="https://www.12306.cn/" target="_blank" rel="noreferrer"
+            >12306 ↗</a
+          >
+          ·
+          <a href="https://railgo.dev/" target="_blank" rel="noreferrer"
+            >线路数据来自 RailGo ↗</a
+          >
+        </p>
+      </div>
+    </dialog>
+    <dialog id="groups-dialog" aria-labelledby="groups-title">
+      <div class="dialog-heading">
+        <h2 id="groups-title">管理旅程</h2>
+        <button class="close" data-close="groups-dialog" aria-label="关闭">
+          ×
+        </button>
+      </div>
+      <form id="group-form">
+        <label
+          >新旅程名称<input
+            id="group-name"
+            required
+            maxlength="60"
+            placeholder="例如 春日江南" /></label
+        ><button class="primary" type="submit">创建旅程</button>
+      </form>
+      <div id="group-list"></div>
+      <p id="groups-status" class="form-status hidden" role="status"></p>
+    </dialog>
+    <dialog id="trip-details" aria-labelledby="details-title">
+      <div class="dialog-heading">
+        <h2 id="details-title">行程详情</h2>
+        <button class="close" data-close="trip-details" aria-label="关闭">
+          ×
+        </button>
+      </div>
+      <div id="details-body"></div>
+      <div id="details-status" class="form-status hidden" role="status"></div>
+    </dialog>
+    <dialog id="restore-dialog" aria-labelledby="restore-title">
+      <div class="dialog-heading">
+        <h2 id="restore-title">核对备份内容</h2>
+        <button class="close" data-close="restore-dialog" aria-label="关闭">
+          ×
+        </button>
+      </div>
+      <p class="field-hint">
+        默认只新增有效记录；冲突项保留现有内容。应用后不会清空记录库。
+      </p>
+      <div id="restore-summary"></div>
+      <div id="restore-rows"></div>
+      <p id="restore-status" class="form-status hidden" role="status"></p>
+      <label id="restore-extras" class="check-label hidden"
+        ><input id="restore-include-extras" type="checkbox" checked /><span
+          id="restore-extras-caption"
+        ></span
+      ></label>
+      <div class="dialog-footer">
+        <button class="secondary" data-close="restore-dialog">取消</button
+        ><button id="apply-restore" class="primary">合并选中内容</button>
+      </div>
+    </dialog>
+    <dialog id="delete-dialog" aria-labelledby="delete-title">
+      <div class="dialog-heading">
+        <h2 id="delete-title">删除这段行程？</h2>
+      </div>
+      <p id="delete-caption"></p>
+      <div class="dialog-footer">
+        <button class="secondary" data-close="delete-dialog">保留</button
+        ><button id="confirm-delete" class="primary danger">删除行程</button>
+      </div>
+    </dialog>
+    <dialog id="video-dialog" aria-labelledby="video-title">
+      <div class="dialog-heading">
+        <div>
+          <span class="eyebrow">YOUR JOURNEY, A FILM</span>
+          <h2 id="video-title">导出旅程视频</h2>
+        </div>
+        <button id="video-close" class="close" aria-label="关闭视频导出">
+          ×
+        </button>
+      </div>
+      <p class="field-hint">
+        完整旅程，包含地图、地名、车次和飞行弧线。开头与结尾展示全部地点；视频在本机生成，请保持此页面可见。
+      </p>
+      <div class="form-row video-settings">
+        <label
+          >画质<select id="video-resolution">
+            <option value="1080">1080p · 1920 × 1080</option>
+            <option value="720">720p · 1280 × 720</option>
+          </select></label
+        ><label
+          >回放速度<select id="video-speed">
+            <option value="1">1×</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+            <option value="8">8×</option>
+            <option value="16">16×</option>
+            <option value="32">32×</option>
+          </select></label
+        >
+      </div>
+      <fieldset class="video-privacy">
+        <legend>视频呈现</legend>
+        <label
+          ><input id="video-hide-dates" type="checkbox" />隐藏具体日期</label
+        ><label
+          ><input
+            id="video-hide-numbers"
+            type="checkbox"
+          />隐藏车次与航班号</label
+        ><label
+          ><input id="video-cities-only" type="checkbox" />仅显示城市</label
+        >
+      </fieldset>
+      <p id="video-scope" class="field-hint"></p>
+      <details id="video-omitted" class="hidden">
+        <summary>查看未纳入视频的待补全记录</summary>
+        <ul id="video-omitted-list"></ul>
+      </details>
+      <p id="video-estimate" class="field-hint"></p>
+      <div id="video-stage" class="hidden">
+        <canvas id="video-canvas" aria-label="导出视频预览"></canvas
+        ><video
+          id="video-result"
+          class="hidden"
+          controls
+          playsinline
+          preload="metadata"
+          aria-label="已生成的旅程视频"
+        ></video>
+      </div>
+      <div id="video-status" class="form-status hidden" role="status"></div>
+      <progress
+        id="video-progress"
+        class="hidden"
+        max="1"
+        value="0"
+        aria-label="视频生成进度"
+      ></progress>
+      <div class="dialog-footer">
+        <button id="video-cancel" class="secondary hidden">取消生成</button
+        ><a id="video-download" class="secondary hidden">下载视频</a
+        ><button id="video-start" class="primary">生成并下载视频</button>
+      </div>
+    </dialog>
+    <div id="toast" class="toast hidden" role="status"></div>
+    <div
+      id="route-update-status"
+      class="route-update-status hidden"
+      role="status"
+      aria-live="polite"
+    ></div>
+  </body>
+</html>
