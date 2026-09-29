@@ -1,4 +1,4 @@
-# GitHub 上传准备
+# GitHub 仓库与发布
 
 项目名称：途映 · TripReel。仓库名：`tripreel`。目标账号：`xinyang20`。用户选择的可见性：公开。
 
@@ -10,7 +10,7 @@
 
 改名只更新品牌和文件名。IndexedDB 名称 `travel-trace`、旧版键 `travel-trace.v1`、备份格式和 HTTP 接口继续兼容；保持同一浏览器与 `http://127.0.0.1:4173` 即可继续使用既有记录。换源码目录不会移动或上传浏览器数据。
 
-本次范围是准备上传。GitHub 仓库的创建和推送命令见下方，尚未执行；GitHub Actions 也尚未在远程运行。
+公开仓库已创建：[xinyang20/tripreel](https://github.com/xinyang20/tripreel)。本地 `main` 分支通过 `origin` 同步源码，GitHub Actions 的最新结果以仓库的 [Actions 记录](https://github.com/xinyang20/tripreel/actions) 为准。
 
 ## 仓库内容
 
@@ -39,18 +39,25 @@ CI 对 Node 22 和 24 执行静态检查、构建和单元/服务测试，全部
 
 工作流配置依据 [actions/checkout](https://github.com/actions/checkout)、[actions/setup-node](https://github.com/actions/setup-node) 和 [pnpm/action-setup](https://github.com/pnpm/action-setup) 的官方使用说明。pnpm 版本继续由 `package.json` 的 `packageManager` 指定。
 
-## 创建并上传
+## 克隆与后续上传
 
-准备好实际发布时，在新目录中执行：
+在其他目录取得项目：
 
 ```sh
-gh auth status
-git status --short
-gh repo create xinyang20/tripreel --public --source=. --remote=origin --description '途映 · 把走过的路，映成故事。个人火车与飞机旅行轨迹、地图回放和视频导出。'
-git push -u origin main
+gh repo clone xinyang20/tripreel
+cd tripreel
+pnpm install --frozen-lockfile
+pnpm run build
 ```
 
-如果同名远程仓库已经存在，先核对内容与归属，再设置远程地址；不要用强制推送覆盖。没有自动开启 Pages、网站托管或公网 API 代理。
+本地修改完成并验证后，提交具体文件再推送：
+
+```sh
+git status --short
+git push origin main
+```
+
+推送前确认提交不含私人文件，并先同步远程新增提交；不要用强制推送覆盖。没有自动开启 Pages、网站托管或公网 API 代理。
 
 ## 许可状态
 

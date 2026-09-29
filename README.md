@@ -1,5 +1,7 @@
 # 途映 · TripReel
 
+[GitHub 仓库](https://github.com/xinyang20/tripreel) · [自动检查](https://github.com/xinyang20/tripreel/actions)
+
 > 把走过的路，映成故事。
 
 把火车和飞机行程串成可回放的旅行地图。面向个人在本机使用，记录、线路、草稿和旅程分组保存在当前浏览器的 IndexedDB 中。无需注册账号或配置 API Key；公开查询服务缺数据时，可以先保存待补全记录。
