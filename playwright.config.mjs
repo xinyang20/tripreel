@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+const software = Boolean(process.env.CI || process.env.TRAVEL_TEST_SOFTWARE_GL);
 export default defineConfig({
   testDir: './tests/browser',
   timeout: 60000,
@@ -8,9 +9,15 @@ export default defineConfig({
   use: {
     baseURL: 'http://127.0.0.1:43717',
     viewport: { width: 1280, height: 720 },
-    channel: 'chrome',
+    channel: software ? undefined : 'chrome',
     launchOptions: {
-      args: ['--enable-webgl', '--use-angle=gl', '--disable-gpu-sandbox'],
+      args: software
+        ? [
+            '--enable-webgl',
+            '--use-angle=swiftshader',
+            '--enable-unsafe-swiftshader',
+          ]
+        : ['--enable-webgl', '--use-angle=gl', '--disable-gpu-sandbox'],
     },
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
