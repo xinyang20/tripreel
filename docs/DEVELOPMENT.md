@@ -1,6 +1,6 @@
 # 开发说明
 
-本项目保持本机应用结构：Node.js HTTP 服务负责静态资源和固定来源查询，浏览器原生 JavaScript ES modules 负责界面、IndexedDB 存储、地图及视频。没有 React、Vite、TypeScript 或独立前端编译流程。用户使用说明见 [README](../README.md)，修改前阅读 [协作规则](../AGENTS.md)。
+本项目默认在本机运行：Node.js HTTP 服务负责静态资源和固定来源查询，浏览器原生 JavaScript ES modules 负责界面、IndexedDB 存储、地图及视频。受限公开模式通过反向代理提供 HTTPS，仍使用同一浏览器存储结构。没有 React、Vite、TypeScript 或独立前端编译流程。用户使用说明见 [README](../README.md)，修改前阅读 [协作规则](../AGENTS.md)。
 
 ## 环境与日常命令
 
@@ -20,6 +20,8 @@
 **`dist/` 是前端源码目录，不是可清空的构建产物。** 构建脚本只从已安装依赖复制 MapLibre/Three 运行库到 `dist/vendor/` 并检查少量入口，不编译前端，也不重建地点数据。
 
 服务固定监听 `127.0.0.1:4173`，没有地址或端口环境变量。修改浏览器模块后刷新即可；修改 `server.mjs` 或其导入的共享模块后需要重启。在启动终端按 `Ctrl+C` 停止。开发验证不应占用或改写用户正在使用的页面和浏览器数据。
+
+受限公开模式使用 `TRIPREEL_PUBLIC_ORIGIN=https://tripreel.xinyang20.cn` 和 `TRIPREEL_RAILGO=disabled`，不改变监听地址。公开来源用于限定允许的 Host/Origin；不能通过任意 `X-Forwarded-Host` 或用户请求动态扩大允许列表。反向代理需保留公开 Host 与浏览器 Origin，RailGo 禁用时所有在线轨道及主数据分支都应跳过，停站示意改用允许的 12306 结果。环境变量变更后需重启进程，完整配置见 [部署说明](DEPLOYMENT.md)。
 
 ## 目录与模块
 
@@ -60,14 +62,15 @@ tripreel/
 
 ## 本机接口与请求控制
 
-| 接口                   | 用途                                 | 服务端总预算   |
-| ---------------------- | ------------------------------------ | -------------- |
-| `GET /api/train`       | 列车停站与时刻查询，含允许的参考降级 | 75 秒          |
-| `GET /api/flight`      | 单日期航班查询                       | 20 秒          |
-| `POST /api/route`      | 实际乘坐区间的路线解析               | 75 秒          |
-| `GET /api/diagnostics` | 进程内聚合连接、队列及缓存状态       | 不执行外部查询 |
+| 接口                    | 用途                                 | 服务端总预算   |
+| ----------------------- | ------------------------------------ | -------------- |
+| `GET /api/train`        | 列车停站与时刻查询，含允许的参考降级 | 75 秒          |
+| `GET /api/flight`       | 单日期航班查询                       | 20 秒          |
+| `POST /api/route`       | 实际乘坐区间的路线解析               | 75 秒          |
+| `GET /api/diagnostics`  | 进程内聚合连接、队列及缓存状态       | 不执行外部查询 |
+| `GET /api/capabilities` | 部署模式、RailGo 开关及公开提示      | 不执行外部查询 |
 
-`createTravelServer(...)` 可注入模拟上游并监听临时端口，供测试使用；正常启动仍固定本机地址。请求保留 Host/Origin 校验和请求体限制，不接受任意上游 URL。
+`createTravelServer(...)` 可注入模拟上游并监听临时端口，供测试使用；正常启动仍固定本机地址。请求保留 Host/Origin 校验和请求体限制，不接受任意上游 URL。公开模式的外层代理不得缓存 `/api/*`，也不把聚合诊断误当成用户个人数据同步接口。
 
 线路返回通过 `resolution.state` 区分 `ready`、`needs-confirmation`、`unavailable`，待确认示意同时带有 `requiresConfirmation`。错误保留可读 `error`、稳定 `code` 和 `retryable`，界面据此提示调整输入、重试或取消。
 

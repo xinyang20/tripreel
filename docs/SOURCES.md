@@ -1,6 +1,6 @@
 # 数据来源与使用边界
 
-以下来源在 2026-09-21 进行过访问或数据核对。本轮实现和模拟测试没有重新联网验证这些来源，核实日期不因此顺延。公开网页内部接口不等于有稳定性承诺的开发者 API；网站明确保留查询失败和人工核对流程。
+以下数据来源在 2026-09-21 进行过访问或数据核对。2026-10-01 重新核对了 [RailGo API 文档](https://api.railgo.dev/) 的访问条款，用于确定公开部署时禁用其在线接口，并执行了一次 12306 查询连通性检查，结果见 [验收记录](VALIDATION.md)。没有全面重新核验班次、轨道、地点数据或其他来源，原数据核实日期不因此顺延。公开网页内部接口不等于有稳定性承诺的开发者 API；网站明确保留查询失败和人工核对流程。
 
 项目自有代码采用根目录的 [MIT License](../LICENSE)。本页列出的第三方代码、依赖、数据和在线服务分别遵循其原有许可、归属与访问条件，不因项目采用 MIT 而改变。特别是 [RailGo 坐标转换代码的原许可](../licenses/RAILGO-LICENSE.txt) 应保留，代码许可与 RailGo 在线接口的访问条件分别处理。
 
@@ -8,7 +8,7 @@
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | 列车编号、停站、计划时刻 | [中国铁路 12306](https://www.12306.cn/)                                                                                            | 使用公开网页的车次搜索与停站查询，不登录、不查询乘客信息                                             |
 | 航班机场、计划时刻、状态 | [航旅纵横公开航班查询](https://www.umetrip.com/weixin/aliPay/flightSearch.html)                                                    | 使用该页面实际调用的匿名航班号查询，不需要账户、密钥或 Cookie                                        |
-| 车次线路坐标             | [RailGo](https://railgo.dev/) · [API 文档](https://api.railgo.dev/)                                                                | `mapLine` 接口，无密钥；本地串行请求、缓存 6 小时，显著保留来源链接                                  |
+| 车次线路坐标             | [RailGo](https://railgo.dev/) · [API 文档](https://api.railgo.dev/)                                                                | 仅本机默认模式使用 `mapLine`，串行请求、缓存 6 小时并保留来源；受限公开模式禁用所有 RailGo 在线接口  |
 | 中文铁路站点坐标         | [chinese-railway-gtfs](https://github.com/wensimehrp/chinese-railway-gtfs)                                                         | 中文站名全等匹配，不以拼音猜测；来自 OSM 的 WGS84 坐标                                               |
 | 车站电报码与同城分组     | [12306 公开站名文件](https://kyfw.12306.cn/otn/resources/js/framework/station_name.js)                                             | 中文站名、电报码、城市名及城市分组，用于停站查询和地图标签合并；不同城市同名站不会仅因名字相同被合并 |
 | 机场位置                 | [OurAirports](https://ourairports.com/data/) · [CSV 镜像](https://github.com/datasets/airport-codes)                               | 公共领域数据，中国大陆机场按 IATA/ICAO 匹配                                                          |
@@ -19,6 +19,8 @@
 ## 查询接口
 
 服务端只允许固定的上游来源，不接受任意代理 URL。
+
+下列清单包含本机版可用的全部来源。受限公开模式不会请求 RailGo 的 `mapLine` 或 `getTrainMain`，列车线路仅从 12306 有序停站或手动途经点生成待确认示意；也不会调用依赖 RailGo 的同线区间回退。已有备份中的线路与来源继续按原格式读取，禁用在线接口不重写既有记录。
 
 ```text
 GET https://search.12306.cn/search/v1/train/search?keyword={车次}&date={YYYYMMDD}
@@ -76,7 +78,9 @@ pnpm exec node scripts/prepare-data.mjs --stations /path/to/rail-stations.csv --
 
 ## 授权与公开部署边界
 
-RailGo 文档允许无需密钥的免费访问，同时约束商业收费使用并禁止公开接口中转。本机个人版使用仅监听 `127.0.0.1` 的服务。若未来公开部署，应重新确认授权方案。
+2026-10-01 核对的 [RailGo API 文档](https://api.railgo.dev/) 允许无需密钥的免费访问，同时约束商业收费使用并禁止公开接口中转。因此，受限公开模式必须配置 `TRIPREEL_RAILGO=disabled`，不能把 RailGo 查询藏在其他接口、后台刷新或 CDN 后继续提供。默认本机版仍仅监听 `127.0.0.1`；原坐标转换实现、来源归属和第三方许可继续保留。
+
+公开模式保留 12306 和航旅纵横的固定来源查询，并沿用有界队列、缓存及端到端预算；这不构成对第三方服务稳定性或重新授权的保证。维护者需遵守各来源当时有效的访问条件，查询失败时保留手动录入及待补全流程，不增加任意 URL 代理。部署、CDN 与证书要求见 [部署说明](DEPLOYMENT.md)。
 
 OpenStreetMap 派生数据归属：© [OpenStreetMap contributors](https://www.openstreetmap.org/copyright)，按 Open Database License（ODbL）使用。地图中保留可点击来源说明。代码依赖各自许可见对应包的许可文件。
 

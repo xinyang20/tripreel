@@ -61,4 +61,4 @@ git push origin main
 
 项目自有代码采用 [MIT License](../LICENSE)。复制或分发相关代码时保留其版权与许可声明。
 
-第三方代码、依赖、数据和在线服务仍遵循各自的许可、归属与访问条件，根目录 MIT 许可不替换这些条件。保留 [RailGo 原许可](../licenses/RAILGO-LICENSE.txt) 及 [SOURCES.md](SOURCES.md) 的来源说明；开源代码不代表取得第三方数据的重新授权，也不代表获准公开部署当前查询代理。
+第三方代码、依赖、数据和在线服务仍遵循各自的许可、归属与访问条件，根目录 MIT 许可不替换这些条件。保留 [RailGo 原许可](../licenses/RAILGO-LICENSE.txt) 及 [SOURCES.md](SOURCES.md) 的来源说明；开源代码不代表取得第三方数据的重新授权。公开部署须采用禁用全部 RailGo 在线接口的受限模式，并配置固定公开来源、反向代理和 HTTPS，具体要求见 [部署说明](DEPLOYMENT.md)，不能直接发布默认本机查询代理。

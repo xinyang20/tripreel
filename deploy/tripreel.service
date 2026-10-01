@@ -1,0 +1,32 @@
+[Unit]
+Description=TripReel travel journal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tripreel
+Group=tripreel
+WorkingDirectory=/opt/tripreel/current
+EnvironmentFile=/etc/tripreel.env
+ExecStart=/opt/tripreel/runtime/node-v24.14.0-linux-x64/bin/node server.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0027
+MemoryMax=384M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target
