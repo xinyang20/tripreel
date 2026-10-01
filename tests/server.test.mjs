@@ -13,6 +13,41 @@ const airports = [
   { name: '乙机场', code: 'BBB', coord: [111, 31] },
 ];
 const response = (data) => ({ ok: true, json: async () => data });
+function httpJSON(base, pathname, { headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const request = http.request(
+      new URL(pathname, base),
+      {
+        method: body ? 'POST' : 'GET',
+        headers: {
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+          ...headers,
+        },
+      },
+      (response) => {
+        let text = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+          text += chunk;
+        });
+        response.on('error', reject);
+        response.on('end', () => {
+          try {
+            resolve({
+              status: response.statusCode,
+              headers: response.headers,
+              data: JSON.parse(text),
+            });
+          } catch (error) {
+            reject(error);
+          }
+        });
+      },
+    );
+    request.on('error', reject);
+    request.end(body ? JSON.stringify(body) : undefined);
+  });
+}
 async function localServer(t, options = {}) {
   const server = await createTravelServer({
     stations,
@@ -462,6 +497,165 @@ test('HTTP 接口校验 Host、Origin、方法、JSON 和请求体上限', async
   });
   assert.equal(tooLarge.status, 413);
   assert.equal((await api('/api/not-real')).status, 404);
+});
+
+test('默认本机能力保持 RailGo 可用，公开配置校验 HTTPS origin', async (t) => {
+  const { api } = await localServer(t);
+  assert.deepEqual((await api('/api/capabilities')).data, {
+    deployment: 'local',
+    railgoEnabled: true,
+    notice: '',
+  });
+  for (const publicOrigin of [
+    'http://tripreel.xinyang20.cn',
+    'https://tripreel.xinyang20.cn/path',
+    'https://tripreel.xinyang20.cn/../',
+    'https://user:password@tripreel.xinyang20.cn',
+    'https://tripreel.xinyang20.cn?query=1',
+    'https://tripreel.xinyang20.cn?',
+    'https://tripreel.xinyang20.cn#fragment',
+    'https://tripreel.xinyang20.cn#',
+    'tripreel.xinyang20.cn',
+    '',
+    false,
+  ])
+    await assert.rejects(
+      createTravelServer({ publicOrigin, stations, airports }),
+      TypeError,
+    );
+  await assert.rejects(
+    createTravelServer({ railgoEnabled: 'false', stations, airports }),
+    TypeError,
+  );
+});
+
+test('公开部署按精确 Host 和 Origin 校验，不信任转发头', async (t) => {
+  const publicOrigin = 'https://tripreel.xinyang20.cn',
+    Host = 'tripreel.xinyang20.cn',
+    body = { mode: 'flight', from: 'AAA', to: 'BBB' };
+  const { base } = await localServer(t, {
+    publicOrigin: 'https://tripReel.xinyang20.cn/',
+    fetchImpl: async () => {
+      throw new Error('must not query');
+    },
+  });
+  const capabilities = await httpJSON(base, '/api/capabilities', {
+    headers: { Host },
+  });
+  assert.equal(capabilities.status, 200);
+  assert.equal(capabilities.headers['cache-control'], 'no-store');
+  assert.deepEqual(capabilities.data, {
+    deployment: 'public',
+    railgoEnabled: false,
+    notice:
+      '此部署已停用 RailGo 在线轨道查询；火车可使用停站或手动途经点示意，飞机使用示意弧线。',
+  });
+  assert.equal(
+    (await httpJSON(base, '/api/diagnostics', { headers: { Host } })).data
+      .localOnly,
+    false,
+  );
+  for (const headers of [
+    { Host: 'evil.example' },
+    { Host: 'tripreel.xinyang20.cn.evil.example' },
+    {
+      Host: 'evil.example',
+      'X-Forwarded-Host': Host,
+      'X-Forwarded-Proto': 'https',
+    },
+  ]) {
+    const result = await httpJSON(base, '/api/capabilities', { headers });
+    assert.equal(result.status, 403);
+    assert.equal(result.data.code, 'INVALID_HOST');
+  }
+  for (const Origin of [
+    'https://evil.example',
+    'http://tripreel.xinyang20.cn',
+    'null',
+  ]) {
+    const result = await httpJSON(base, '/api/capabilities', {
+      headers: { Host, Origin, 'X-Forwarded-Proto': 'https' },
+    });
+    assert.equal(result.status, 403);
+    assert.equal(result.data.code, 'INVALID_ORIGIN');
+  }
+  const missingOrigin = await httpJSON(base, '/api/route', {
+    headers: { Host },
+    body,
+  });
+  assert.equal(missingOrigin.status, 403);
+  assert.equal(missingOrigin.data.code, 'INVALID_ORIGIN');
+  const sameOrigin = await httpJSON(base, '/api/route', {
+    headers: {
+      Host,
+      Origin: publicOrigin,
+      'X-Forwarded-Host': 'evil.example',
+      'X-Forwarded-Proto': 'http',
+    },
+    body,
+  });
+  assert.equal(sameOrigin.status, 200);
+  assert.equal(sameOrigin.data.quality, 'schematic');
+  assert.equal((await httpJSON(base, '/api/capabilities')).status, 200);
+});
+
+test('公开禁用 RailGo 后仍能生成停站示意且不请求 RailGo', async (t) => {
+  const upstream = provider({ emptyTrack: false });
+  const { api } = await localServer(t, {
+    ...upstream,
+    publicOrigin: 'https://tripreel.xinyang20.cn',
+  });
+  const route = await api('/api/route', {
+    mode: 'train',
+    number: 'K1',
+    date: '2026-09-26',
+    from: '甲',
+    to: '丙',
+  });
+  assert.equal(route.status, 200);
+  assert.equal(route.data.quality, 'station-schematic');
+  assert.equal(route.data.requiresConfirmation, true);
+  assert.equal(route.data.routeSource, '12306');
+  assert.ok(
+    route.data.warnings.some((message) => message.includes('已停用 RailGo')),
+  );
+  assert.ok(upstream.calls.length > 0);
+  assert.ok(
+    upstream.calls.every((url) =>
+      ['search.12306.cn', 'kyfw.12306.cn'].includes(new URL(url).hostname),
+    ),
+  );
+});
+
+test('停用 RailGo 的缺线路提示不可重试，手工和飞机示意不依赖上游', async (t) => {
+  let calls = 0;
+  const { api } = await localServer(t, {
+    railgoEnabled: false,
+    fetchImpl: async () => {
+      calls++;
+      throw new Error('must not query');
+    },
+  });
+  const body = { mode: 'train', number: 'K1', from: '甲', to: '丙' };
+  const pending = await api('/api/route', body);
+  assert.equal(pending.data.resolution.state, 'unavailable');
+  assert.equal(pending.data.resolution.code, 'NO_RAIL_DATA');
+  assert.equal(pending.data.resolution.retryable, false);
+  assert.match(pending.data.resolution.message, /已停用 RailGo/);
+  const manual = await api('/api/route', {
+    ...body,
+    via: '乙',
+    manualSchematic: true,
+  });
+  assert.equal(manual.data.quality, 'manual-schematic');
+  assert.equal(manual.data.requiresConfirmation, true);
+  const flight = await api('/api/route', {
+    mode: 'flight',
+    from: 'AAA',
+    to: 'BBB',
+  });
+  assert.equal(flight.data.quality, 'schematic');
+  assert.equal(calls, 0);
 });
 
 test('G813 共线白名单继续优先使用经核验的 G1 区间', async (t) => {

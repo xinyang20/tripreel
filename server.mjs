@@ -136,7 +136,40 @@ export async function createTravelServer({
   now = Date.now,
   today = chinaToday,
   schedulerOptions = {},
+  publicOrigin = null,
+  railgoEnabled = publicOrigin === null,
 } = {}) {
+  let publicURL = null;
+  if (publicOrigin !== null) {
+    if (typeof publicOrigin !== 'string')
+      throw new TypeError('公开网站地址必须是完整的 HTTPS origin。');
+    try {
+      publicURL = new URL(publicOrigin);
+    } catch {
+      throw new TypeError('公开网站地址必须是完整的 HTTPS origin。');
+    }
+    if (
+      publicURL.protocol !== 'https:' ||
+      !/^https:\/\/[^/?#]+\/?$/i.test(publicOrigin) ||
+      publicURL.username ||
+      publicURL.password ||
+      publicURL.pathname !== '/' ||
+      publicURL.search ||
+      publicURL.hash
+    )
+      throw new TypeError(
+        '公开网站地址只能包含 HTTPS 协议和主机，不能包含路径、账号、查询或片段。',
+      );
+  }
+  if (typeof railgoEnabled !== 'boolean')
+    throw new TypeError('RailGo 开关必须是布尔值。');
+  const capabilities = {
+    deployment: publicURL ? 'public' : 'local',
+    railgoEnabled,
+    notice: railgoEnabled
+      ? ''
+      : '此部署已停用 RailGo 在线轨道查询；火车可使用停站或手动途经点示意，飞机使用示意弧线。',
+  };
   const stations =
     inputStations ||
     JSON.parse(await readFile(path.join(root, 'data/stations.json'), 'utf8'));
@@ -390,7 +423,12 @@ export async function createTravelServer({
       return { name: String(name || '').trim(), coord: null };
     }
   };
-  function railData(endpoint, number, context) {
+  async function railData(endpoint, number, context) {
+    if (!railgoEnabled)
+      throw new TravelError('NO_RAIL_DATA', capabilities.notice, {
+        retryable: false,
+        status: 403,
+      });
     return scheduler.memo(
       `railgo:${endpoint}:${number}`,
       async (inner) => {
@@ -824,17 +862,32 @@ export async function createTravelServer({
     res.on('close', disconnected);
     try {
       const port = server.address()?.port,
-        host = req.headers.host;
-      if (!host || ![`127.0.0.1:${port}`, `localhost:${port}`].includes(host))
+        host = req.headers.host,
+        publicRequest = Boolean(publicURL && host === publicURL.host),
+        localRequest = [`127.0.0.1:${port}`, `localhost:${port}`].includes(
+          host,
+        );
+      if (!host || (!localRequest && !publicRequest))
         throw new TravelError('INVALID_HOST', '无效主机。', { status: 403 });
       const url = new URL(req.url, `http://${host}`);
       if (url.pathname.startsWith('/api/')) {
-        if (req.headers.origin && req.headers.origin !== `http://${host}`)
+        const expectedOrigin = publicRequest
+          ? publicURL.origin
+          : `http://${host}`;
+        if (
+          (req.headers.origin && req.headers.origin !== expectedOrigin) ||
+          (publicRequest && req.method === 'POST' && !req.headers.origin)
+        )
           throw new TravelError('INVALID_ORIGIN', '仅允许当前网站请求。', {
             status: 403,
           });
+        if (url.pathname === '/api/capabilities' && req.method === 'GET')
+          return send(res, capabilities);
         if (url.pathname === '/api/diagnostics' && req.method === 'GET')
-          return send(res, { localOnly: true, ...scheduler.diagnostics() });
+          return send(res, {
+            localOnly: !publicURL,
+            ...scheduler.diagnostics(),
+          });
         const endpoint = url.pathname.slice('/api/'.length),
           maximum = REQUEST_BUDGETS[endpoint];
         if (
@@ -936,7 +989,18 @@ if (
   process.argv[1] &&
   path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  const server = await createTravelServer();
+  const railgoSetting = process.env.TRIPREEL_RAILGO;
+  if (
+    railgoSetting !== undefined &&
+    !['enabled', 'disabled'].includes(railgoSetting)
+  )
+    throw new TypeError('TRIPREEL_RAILGO 只能设置为 enabled 或 disabled。');
+  const server = await createTravelServer({
+    publicOrigin: process.env.TRIPREEL_PUBLIC_ORIGIN || null,
+    ...(railgoSetting === undefined
+      ? {}
+      : { railgoEnabled: railgoSetting === 'enabled' }),
+  });
   server.listen(4173, '127.0.0.1', () =>
     console.log('途映已启动：http://127.0.0.1:4173'),
   );
