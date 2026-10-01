@@ -19,9 +19,49 @@ export const filters = {
   search: '',
 };
 state.selection = new Set();
+state.capabilities = { deployment: 'unknown', railgoEnabled: false };
 let deleteTarget,
   previousView = '',
   loaded = false;
+async function loadCapabilities() {
+  try {
+    const capabilities = await api('/api/capabilities', undefined, {
+      timeoutMs: 10000,
+    });
+    if (
+      !['local', 'public'].includes(capabilities.deployment) ||
+      typeof capabilities.railgoEnabled !== 'boolean' ||
+      typeof capabilities.notice !== 'string'
+    )
+      throw new Error('部署能力信息无效。');
+    state.capabilities = capabilities;
+    if (!capabilities.railgoEnabled) {
+      const notice =
+        capabilities.notice ||
+        '此部署已停用 RailGo 在线轨道查询；火车可使用停站或手动途经点示意，飞机使用示意弧线。';
+      for (const id of ['deployment-notice', 'query-source-notice']) {
+        $(id).textContent = notice;
+        $(id).classList.remove('hidden');
+      }
+      $('train-route-hint').textContent =
+        '停站与手动途经点仅用于生成示意连线，须预览确认，不代表真实轨道。';
+      $('train-source-copy').textContent =
+        '火车：此部署停用 RailGo 在线轨道查询。12306 公开网页服务提供停站和计划时刻；根据可靠停站或手动途经点生成的连线仅为示意，须预览确认，不代表实际轨道或当日调度。原有线路和导入备份仍可查看，缺少信息时可保存为待补全。';
+      $('railgo-source-link').textContent = 'RailGo（示例及本机版线路来源）';
+    }
+  } catch {
+    const message =
+      '暂时无法确认本站线路查询能力，已暂停自动更新线路。已有行程和手动录入仍可使用，请刷新页面重试。';
+    for (const id of ['deployment-notice', 'query-source-notice']) {
+      $(id).textContent = message;
+      $(id).classList.remove('hidden');
+    }
+    $('train-route-hint').textContent =
+      '本站线路查询能力暂未确认；可保留输入，已有线路不会自动更新。';
+    $('train-source-copy').textContent =
+      '火车：暂时无法确认本站线路查询能力，已暂停自动更新。可手动记录车次、日期、地点与时刻，已有线路和备份不受影响。';
+  }
+}
 function card(trip) {
   const date = tripDate(trip),
     playable = canReplay(trip),
@@ -88,6 +128,9 @@ function render() {
   for (const id of ['play', 'restart', 'progress', 'export-video'])
     $(id).disabled = !playable.length;
   for (const id of ['add-trip', 'import-text']) $(id).disabled = !!state.locked;
+  $('refresh-routes').disabled =
+    state.locked ||
+    !state.saved.some((trip) => trip.mode === 'train' && !trip.routeFrozen);
   $('progress-start').textContent = playable[0]?.from.name || '起点';
   $('progress-end').textContent = playable.at(-1)?.to.name || '终点';
   renderLibraryUI(filters);
@@ -177,8 +220,17 @@ $('demo-button').onclick = async () => {
     $('demo-button').disabled = false;
   }
 };
+$('refresh-routes').onclick = async () => {
+  $('about').close();
+  try {
+    await refreshStoredRoutes({ force: true });
+  } catch (error) {
+    toast(error.message);
+  }
+};
 async function init() {
   for (const id of ['add-trip', 'import-text']) $(id).disabled = true;
+  const capabilities = loadCapabilities();
   await store.load();
   loaded = true;
   render();
@@ -191,6 +243,7 @@ async function init() {
   } catch {
     toast('地点字典读取失败，已知行程仍可保存，稍后可重试匹配。');
   }
+  await capabilities;
   if (!state.locked) refreshStoredRoutes();
 }
 init().catch((error) => {

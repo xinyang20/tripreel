@@ -51,6 +51,7 @@ export function cancelRouteRefresh() {
 }
 export async function refreshStoredRoutes({ force = false } = {}) {
   if (running || !state.ready || state.locked || $('editor')?.open) return;
+  if (!force && state.capabilities?.railgoEnabled === false) return;
   if (force) attempted.clear();
   const pending = state.saved.filter(
     (trip) =>
@@ -97,7 +98,11 @@ export async function refreshStoredRoutes({ force = false } = {}) {
             fromCoord: trip.from.coord,
             toCoord: trip.to.coord,
           },
-          { signal, timeoutMs: 80000, priority: 'background' },
+          {
+            signal,
+            timeoutMs: 80000,
+            priority: force ? 'foreground' : 'background',
+          },
         );
         if (signal.aborted || $('editor')?.open) {
           attempted.delete(key);

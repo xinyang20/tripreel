@@ -1568,6 +1568,9 @@ input[type='range']::-moz-range-thumb {
   margin: 0;
   font-size: 23px;
 }
+#deployment-notice {
+  margin: 8px 22px 12px;
+}
 .journey-stats {
   padding: 0 22px 14px;
 }

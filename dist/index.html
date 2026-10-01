@@ -31,6 +31,7 @@
           <h1>我的旅程<span class="small-badge">本地</span></h1>
           <p>把走过的路，连成故事。</p>
         </div>
+        <p id="deployment-notice" class="field-hint hidden" role="status"></p>
         <div class="journey-stats">
           <div><strong id="stat-count">0</strong><span>段行程</span></div>
           <div>
@@ -257,6 +258,7 @@
         <p class="field-hint" id="lookup-hint">
           填写车次和乘坐日期后查询。若中途上车，查询后选择实际起止站。
         </p>
+        <p id="query-source-notice" class="field-hint hidden" role="status"></p>
         <div id="lookup-status" class="form-status hidden" role="status"></div>
         <div id="train-candidates" class="hidden">
           <p class="field-hint" id="candidates-caption">
@@ -319,7 +321,7 @@
                 placeholder="例如 沧州西、德州东、曲阜东、南京南、苏州北"
               ></textarea>
             </label>
-            <p class="field-hint">
+            <p class="field-hint" id="train-route-hint">
               默认采用最新车次线路；补充站点用于显示停靠位置。线路不代表当日调度记录。
             </p>
           </div>
@@ -442,6 +444,12 @@
           </button>
         </div>
         <div id="data-status" class="form-status hidden" role="status"></div>
+        <button id="refresh-routes" class="text-button" disabled>
+          检查未固定线路
+        </button>
+        <p class="field-hint">
+          查询当前部署可用的线路来源；保留原日期与时刻，示意候选须在编辑时确认。
+        </p>
         <details>
           <summary>待继续的草稿</summary>
           <div id="draft-list"></div>
@@ -461,7 +469,7 @@
           途映把车票、机票上的地点和时间，变成可回放的旅行故事。它不提供实时列车或飞机定位。
         </p>
         <h3>轨迹从哪里来</h3>
-        <p>
+        <p id="train-source-copy">
           <b>火车：</b>12306 公开网页服务提供停站和计划时刻；RailGo
           提供按车次整理的铁路线路坐标，默认采用最新可用线路并截取完整乘坐区间；停站表和时刻差异不会清空轨迹。RailGo
           线路未区分日期，可能与当日实际调度不同。个别中间站无法匹配时保留整条曲线，最新线路本身不可用时保留旧线；有可靠停站的可确认采用“停站连线示意”，也可保存为待补全。
@@ -478,7 +486,7 @@
         </p>
         <h3>数据与保存</h3>
         <p>
-          行程保存在当前浏览器。清除网站数据、更换浏览器或更换本地网址会影响访问。查询时仅向对应服务发送车次、航班号与日期，不发送整份旅行记录。公开网页接口可能调整，未来日期也可能尚无数据；始终以出票信息为准。
+          行程保存在当前浏览器，不会同步到服务器或其他设备。清除网站数据、更换浏览器或更换网址会影响访问。查询时仅向对应服务发送所需的车次、航班号、日期和区间信息，不发送整份旅行记录。公开网页接口可能调整，未来日期也可能尚无数据；始终以出票信息为准。
         </p>
         <p>
           <a
@@ -492,7 +500,11 @@
             >12306</a
           >
           ·
-          <a href="https://railgo.dev/" target="_blank" rel="noreferrer"
+          <a
+            id="railgo-source-link"
+            href="https://railgo.dev/"
+            target="_blank"
+            rel="noreferrer"
             >线路数据来自 RailGo</a
           >
         </p>
