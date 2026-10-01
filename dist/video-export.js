@@ -12,6 +12,7 @@ import {
 import { fitInViewport } from './camera-fit.js';
 import { buildTimeline, replayFrame } from './replay.js';
 import { endpointPlaces, layoutPlaceLabels } from './map-labels.js';
+import { videoViewportBlockers } from './video-layout.js';
 import {
   videoBudget,
   recommendedSpeed,
@@ -193,6 +194,7 @@ function renderMovieFrame(ctx, canvas, map, visual, projection, options) {
       height: h,
       cityIndex: options.cityIndex,
       detail: !visual.overview,
+      blockers: videoViewportBlockers(),
       measure: (name) => ctx.measureText(name).width + 26,
     },
   );
@@ -386,20 +388,7 @@ async function recordMovie(options, canvas, signal, onProgress) {
             maxZoom: 13,
             edge: 28 * scale,
             gap: 20 * scale,
-            blockers: [
-              {
-                left: 25 * scale,
-                top: 25 * scale,
-                right: 650 * scale,
-                bottom: 125 * scale,
-              },
-              {
-                left: 25 * scale,
-                top: 600 * scale,
-                right: 1255 * scale,
-                bottom: 720 * scale,
-              },
-            ],
+            blockers: videoViewportBlockers(scale),
           }),
         );
       const fit = cameras.get(key);

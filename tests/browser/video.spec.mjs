@@ -112,7 +112,7 @@ async function waitRecording(page) {
     .toBe(true);
 }
 
-async function completedVideo(page, output) {
+async function completedVideo(page, output, resolution = 720) {
   const downloaded = page.waitForEvent('download', { timeout: 350000 });
   await page.locator('#video-start').click();
   const download = await downloaded;
@@ -129,7 +129,11 @@ async function completedVideo(page, output) {
       document.querySelector('#video-download').dataset.seconds,
     ),
   }));
-  expect(metadata).toMatchObject({ width: 1280, height: 720, error: null });
+  expect(metadata).toMatchObject({
+    width: (resolution * 16) / 9,
+    height: resolution,
+    error: null,
+  });
   expect(metadata.readyState).toBeGreaterThanOrEqual(2);
   expect(metadata.bytes).toBeGreaterThan(1000);
   await resourcesReleased(page, { preview: true });
@@ -208,6 +212,100 @@ test('浏览器不支持MP4时实际编码并预览WebM', async ({ page }) => {
   await page.keyboard.press('Escape');
   await resourcesReleased(page);
 });
+
+for (const resolution of [720, 1080]) {
+  test(`${resolution}p 视频片头、当前段和片尾的地名避开标题与底栏`, async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      window.videoLabelFrames = [];
+      const frames = new WeakMap(),
+        prototype = CanvasRenderingContext2D.prototype,
+        transform = prototype.setTransform,
+        rounded = prototype.roundRect,
+        text = prototype.fillText;
+      prototype.setTransform = function (...args) {
+        if (this.canvas.id === 'video-canvas')
+          frames.set(this, { phase: 'trip', labels: [] });
+        return transform.apply(this, args);
+      };
+      prototype.roundRect = function (x, y, width, height, ...args) {
+        const frame = frames.get(this);
+        if (frame) frame.box = { x, y, width, height };
+        return rounded.call(this, x, y, width, height, ...args);
+      };
+      prototype.fillText = function (value, ...args) {
+        const frame = frames.get(this);
+        if (frame) {
+          if (String(value).startsWith('• ')) frame.labels.push(frame.box);
+          if (value === '旅程即将开始') frame.phase = 'opening';
+          if (String(value).startsWith('旅程已抵达')) frame.phase = 'closing';
+          if (String(value).startsWith('线路 RailGo'))
+            window.videoLabelFrames.push({
+              phase: frame.phase,
+              labels: frame.labels,
+            });
+        }
+        return text.call(this, value, ...args);
+      };
+    });
+    await openVideo(page);
+    await page.locator('#video-resolution').selectOption(String(resolution));
+    await completedVideo(page, undefined, resolution);
+    const result = await page.evaluate(async () => {
+      const { videoViewportBlockers } = await import('/video-layout.js');
+      const frames = window.videoLabelFrames;
+      return {
+        phases: [...new Set(frames.map((frame) => frame.phase))].sort(),
+        labelCount: frames.reduce(
+          (count, frame) => count + frame.labels.length,
+          0,
+        ),
+        overlaps: frames.flatMap((frame) =>
+          frame.labels.filter((label) =>
+            videoViewportBlockers().some(
+              (blocker) =>
+                label.x < blocker.right &&
+                label.x + label.width > blocker.left &&
+                label.y < blocker.bottom &&
+                label.y + label.height > blocker.top,
+            ),
+          ),
+        ),
+      };
+    });
+    expect(result.phases).toEqual(['closing', 'opening', 'trip']);
+    expect(result.labelCount).toBeGreaterThan(0);
+    expect(result.overlaps).toEqual([]);
+    for (const [phase, seconds] of [
+      ['opening', 0.8],
+      ['trip', 2.35],
+      ['closing', 3.6],
+    ]) {
+      const pixels = await page
+        .locator('#video-result')
+        .evaluate(async (video, time) => {
+          video.pause();
+          await new Promise((resolve, reject) => {
+            video.addEventListener('seeked', resolve, { once: true });
+            video.addEventListener('error', reject, { once: true });
+            video.currentTime = time;
+          });
+          const canvas = document.createElement('canvas');
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          canvas.getContext('2d').drawImage(video, 0, 0);
+          return canvas.toDataURL('image/png').split(',')[1];
+        }, seconds);
+      await writeFile(
+        `output/playwright/video-${resolution}-${phase}.png`,
+        Buffer.from(pixels, 'base64'),
+      );
+    }
+    await page.locator('#video-close').click();
+    await resourcesReleased(page);
+  });
+}
 
 for (const failure of ['webgl', 'encoder']) {
   test(`${failure === 'webgl' ? 'WebGL中断' : '编码失败'}释放流、地图和预览资源`, async ({

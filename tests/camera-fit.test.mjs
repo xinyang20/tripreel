@@ -8,8 +8,13 @@ import {
   fitInViewport,
   safeViewportRects,
 } from '../dist/camera-fit.js';
-import { journeyWorldPoints } from '../dist/map-scene.js';
+import {
+  journeyBounds,
+  journeyWorldPoints,
+  tripRouteLines,
+} from '../dist/map-scene.js';
 import { distance } from '../dist/core.js';
+import { videoViewportBlockers } from '../dist/video-layout.js';
 
 const fov = 36.86989764584402;
 // Independent 4×4 perspective transform in MapLibre's rendering order. These checks
@@ -205,6 +210,56 @@ test('短途允许超过原来的 zoom8，沿途外绕顶点始终纳入取景',
     const fit = fitInViewport(points, { ...viewport, maxZoom: 13.5 });
     assertVisible(points, fit, viewport);
     assert.ok(fit.camera.zoom > 8 && fit.camera.zoom <= 13.5);
+  }
+});
+
+test('旧版连续 legs 的外绕几何与绘制共用取景，正反方向和视频都完整可见', () => {
+  const a = [118.79, 31.96],
+    b = [118.91, 32.12],
+    via = [118.5, 32.04],
+    end = [119.02, 32.15],
+    outward = [119.12, 32.35];
+  const routes = [
+    [[a, via, b]],
+    [[b, via, a]],
+    [
+      [a, via, b],
+      [b, outward, end],
+    ],
+  ];
+  for (const paths of routes) {
+    const trip = {
+      mode: 'train',
+      from: { coord: paths[0][0] },
+      to: { coord: paths.at(-1).at(-1) },
+      stops: [
+        { coord: paths[0][0] },
+        ...paths.map((path) => ({ coord: path.at(-1) })),
+      ],
+      legs: paths.map((coordinates) => ({ coordinates })),
+    };
+    assert.deepEqual(tripRouteLines(trip), paths);
+    const actualVertices = paths.flat().map(mercatorPoint),
+      bounds = journeyBounds([trip]);
+    for (const [lng, lat] of paths.flat())
+      assert.ok(
+        lng >= bounds.getWest() &&
+          lng <= bounds.getEast() &&
+          lat >= bounds.getSouth() &&
+          lat <= bounds.getNorth(),
+      );
+    const videoViewports = [1, 1.5].map((scale) => ({
+      width: 1280 * scale,
+      height: 720 * scale,
+      blockers: videoViewportBlockers(scale),
+    }));
+    for (const viewport of [...viewports, ...videoViewports])
+      assertVisible(
+        actualVertices,
+        fitInViewport(journeyWorldPoints([trip]), viewport),
+        viewport,
+      );
+    assert.deepEqual(tripRouteLines({ ...trip, routeState: 'pending' }), []);
   }
 });
 

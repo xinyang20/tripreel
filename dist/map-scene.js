@@ -50,17 +50,15 @@ export const baseStyle = {
     },
   ],
 };
+export function tripRouteLines(trip) {
+  if (!canRenderRoute(trip)) return [];
+  return trip.routeCoordinates?.length
+    ? [trip.routeCoordinates]
+    : (trip.legs || []).map((leg) => leg.coordinates);
+}
 export function tripCoordinates(trips) {
   return trips
-    .flatMap((t) => [
-      t.from?.coord,
-      t.to?.coord,
-      ...(canRenderRoute(t)
-        ? t.routeCoordinates ||
-          t.stops?.map((s) => s?.routeCoord || s?.coord) ||
-          []
-        : []),
-    ])
+    .flatMap((t) => [t.from?.coord, t.to?.coord, ...tripRouteLines(t).flat()])
     .filter(isPoint);
 }
 export function journeyBounds(trips) {
@@ -105,16 +103,12 @@ export function installJourneyLayers(map, trips, onProjection = () => {}) {
   const lines = [],
     dots = [];
   for (const t of trips) {
-    for (const l of !canRenderRoute(t)
-      ? []
-      : t.routeCoordinates?.length
-        ? [{ coordinates: t.routeCoordinates }]
-        : t.legs || [])
-      if (l.coordinates?.length > 1)
+    for (const coordinates of tripRouteLines(t))
+      if (coordinates?.length > 1)
         lines.push({
           type: 'Feature',
           properties: {},
-          geometry: { type: 'LineString', coordinates: l.coordinates },
+          geometry: { type: 'LineString', coordinates },
         });
     for (const s of canRenderRoute(t)
       ? t.stops || [t.from, t.to]

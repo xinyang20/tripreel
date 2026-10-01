@@ -18,6 +18,7 @@ let map,
   ready = false,
   timeline = buildTimeline([]),
   current = null,
+  selectedTrip = null,
   frame,
   resizeTimer,
   lastTick = 0,
@@ -117,10 +118,10 @@ export function fitMap(trip, duration = 750) {
 }
 function updateLabels() {
   if (!ready || !map) return;
-  const all =
-      overview ||
-      (!state.playing && (state.progress <= 0 || state.progress >= 1)),
-    places = all ? endpointPlaces(state.trips) : current?.places || [],
+  const all = overview,
+    places = all
+      ? endpointPlaces(state.trips)
+      : current?.places || endpointPlaces(selectedTrip ? [selectedTrip] : []),
     width = map.getContainer().clientWidth,
     height = map.getContainer().clientHeight;
   const labels = layoutPlaceLabels(places, {
@@ -172,12 +173,12 @@ export function drawMap() {
     projection = matrix;
     positionAvatar();
   });
-  if ($('follow').checked || !current) fitMap(undefined, 0);
+  if ($('follow').checked) fitMap(undefined, 0);
   updateReplay();
 }
 function fitCurrentView() {
-  if (!ready || !map || (state.playing && !$('follow').checked)) return;
-  fitMap(overview ? undefined : current?.trip, 0);
+  if (!ready || !map || !$('follow').checked) return;
+  fitMap(overview ? undefined : selectedTrip, 0);
   if (state.playing) lastCamera = performance.now() + 130;
 }
 function scheduleFit() {
@@ -207,6 +208,7 @@ if (map)
   }).observe(map.getContainer());
 export function updateReplay() {
   current = replayFrame(timeline, state.progress);
+  selectedTrip = current?.trip || null;
   if (!current) {
     positionAvatar();
     $('playback-title').textContent = '准备好，再出发';
@@ -279,7 +281,7 @@ function tick(now) {
   if (state.progress >= 1) {
     pause();
     overview = true;
-    fitMap();
+    if ($('follow').checked) fitMap();
     updateLabels();
     return;
   }
@@ -294,6 +296,7 @@ export function selectTrip(id) {
     const trip = state.trips.find((t) => t.id === id);
     if (!trip) return;
     current = null;
+    selectedTrip = trip;
     overview = false;
     state.selected = id;
     positionAvatar();
@@ -304,16 +307,7 @@ export function selectTrip(id) {
     document
       .querySelectorAll('[data-trip]')
       .forEach((el) => el.classList.toggle('selected', el.dataset.trip === id));
-    const previous = current;
-    current = {
-      trip,
-      places: [
-        { ...trip.from, kind: trip.mode },
-        { ...trip.to, kind: trip.mode },
-      ],
-    };
     updateLabels();
-    current = previous;
     return;
   }
   overview = false;
@@ -349,9 +343,14 @@ $('progress').oninput = (e) => {
   state.progress = Number(e.target.value) / 1000;
   overview = state.progress === 0 || state.progress === 1;
   updateReplay();
-  if (overview) fitMap();
+  if (overview && $('follow').checked) fitMap();
 };
 $('speed').onchange = (e) => (state.speed = Number(e.target.value));
+$('follow').onchange = () => {
+  map?.stop();
+  playbackPhase = '';
+  if ($('follow').checked) fitCurrentView();
+};
 $('fit-map').onclick = () => {
   pause();
   overview = true;
