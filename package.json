@@ -15,7 +15,8 @@
     "format": "prettier --write dist scripts tests server.mjs eslint.config.js playwright.config.mjs package.json '*.md' docs .github",
     "format:check": "prettier --check dist scripts tests server.mjs eslint.config.js playwright.config.mjs package.json '*.md' docs .github",
     "check": "eslint . && pnpm run format:check",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "benchmark": "node scripts/performance-baseline.mjs"
   },
   "dependencies": {
     "@railroute-ts/china": "2026.9.1",
