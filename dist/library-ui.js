@@ -71,7 +71,7 @@ export function renderLibraryUI(filters) {
   ).length;
   $('filter-summary').textContent = active ? `· ${active} 项` : '';
   $('draft-banner').classList.toggle('hidden', !drafts.length);
-  $('open-drafts').textContent = `继续 ${drafts.length} 份未完成草稿 ↗`;
+  $('open-drafts').textContent = `继续 ${drafts.length} 份未完成草稿`;
   $('draft-list').innerHTML = drafts.length
     ? drafts
         .map(

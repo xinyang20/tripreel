@@ -111,7 +111,7 @@ export function setMode(value) {
   $('train-extra').classList.toggle('hidden', value !== 'train');
   $('train-candidates').classList.add('hidden');
   $('lookup').innerHTML =
-    value === 'train' ? '自动匹配停站与时刻 ↗' : '自动匹配机场与时刻 ↗';
+    value === 'train' ? '自动匹配停站与时刻' : '自动匹配机场与时刻';
   $('lookup-hint').textContent =
     value === 'train'
       ? '填写实际乘车日期与上下车站；中途跨日会自动复核一次始发日期。时刻和线路缺失时可先保存。'

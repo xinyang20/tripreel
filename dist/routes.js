@@ -40,7 +40,7 @@ function report(text, failures = [], retry = false, duration = 0) {
   if (retry) {
     const button = document.createElement('button');
     button.className = 'text-button';
-    button.textContent = '重新更新线路 ↗';
+    button.textContent = '重新更新线路';
     button.onclick = () => refreshStoredRoutes({ force: true });
     panel.append(button);
   }
