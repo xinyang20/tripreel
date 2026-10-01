@@ -30,7 +30,23 @@ const derivedCodes = new Set([
   'schematic-route',
   'corridor-route',
   'frozen-route',
+  'date-mismatch',
 ]);
+export const actualTravelDate = (trip) =>
+  (typeof trip?.travelDate === 'string' && trip.travelDate) ||
+  (typeof trip?.departure === 'string' && trip.departure.slice(0, 10)) ||
+  (typeof trip?.date === 'string' && trip.date) ||
+  '';
+export const journeyPlaceName = (value) =>
+  String(value?.name || value || '')
+    .trim()
+    .replace(/(?:国际机场|机场|火车站|高铁站|站)$/, '');
+export const hasDateMismatch = (trip) =>
+  Boolean(
+    (trip.travelDate || trip.date) &&
+    typeof trip.departure === 'string' &&
+    actualTravelDate(trip) !== trip.departure.slice(0, 10),
+  );
 const point = (p) => {
   try {
     return Array.isArray(p) && Boolean(coordinate(p));
@@ -84,6 +100,7 @@ export function canReplay(trip) {
     canRenderRoute(trip) &&
     trip.routeConfirmed !== false &&
     trip.referenceAccepted !== false &&
+    !hasDateMismatch(trip) &&
     Number.isFinite(parseTime(trip.departure)) &&
     Number.isFinite(parseTime(trip.arrival)) &&
     parseTime(trip.arrival) > parseTime(trip.departure)
@@ -122,6 +139,13 @@ export function tripIssues(trip) {
     }));
   const add = (code, message, field, severity = 'warning') =>
     issues.push({ code, message, field, severity, derived: true });
+  if (hasDateMismatch(trip))
+    add(
+      'date-mismatch',
+      '实际出行日期与出发时刻日期不一致，请编辑核对；原值已保留，暂不能回放。',
+      'date',
+      'error',
+    );
   if (!trip.departure || !trip.arrival)
     add('missing-time', '时刻待补全，暂不能回放。', 'time');
   if (!point(trip.from?.coord) || !point(trip.to?.coord))
@@ -178,8 +202,7 @@ export function normalizeTrip(input) {
   trip.number = String(trip.number || '')
     .trim()
     .toUpperCase();
-  trip.travelDate ||=
-    trip.departure?.slice(0, 10) || trip.queryDate || trip.date || '';
+  trip.travelDate ||= actualTravelDate(trip);
   trip.groupId ??= null;
   trip.revision =
     Number.isInteger(trip.revision) && trip.revision >= 0 ? trip.revision : 0;
@@ -221,7 +244,11 @@ export function normalizeTrip(input) {
   trip.issues = tripIssues(trip);
   return trip;
 }
-export function validateRecord(trip, others = []) {
+export function validateRecord(
+  trip,
+  others = [],
+  { allowDateMismatch = false } = {},
+) {
   if (!trip || typeof trip !== 'object' || Array.isArray(trip))
     throw new Error('行程结构无效。');
   if (!['train', 'flight'].includes(trip.mode))
@@ -229,13 +256,11 @@ export function validateRecord(trip, others = []) {
   if (!/^[A-Z0-9]{1,10}$/i.test(trip.number || ''))
     throw new Error('请填写有效车次或航班号。');
   if (
-    !validDate(
-      trip.travelDate ||
-        trip.departure?.slice(0, 10) ||
-        trip.queryDate ||
-        trip.date,
-    )
+    (trip.travelDate != null && typeof trip.travelDate !== 'string') ||
+    (trip.date != null && typeof trip.date !== 'string')
   )
+    throw new Error('请填写有效出行日期。');
+  if (!validDate(actualTravelDate(trip)))
     throw new Error('请填写有效出行日期。');
   for (const field of ['from', 'to']) {
     if (
@@ -251,6 +276,14 @@ export function validateRecord(trip, others = []) {
   for (const field of ['departure', 'arrival'])
     if (trip[field] && !Number.isFinite(parseTime(trip[field])))
       throw new Error('已填写的时刻无效，请修改或留空待补全。');
+  if (!allowDateMismatch && hasDateMismatch(trip))
+    throw Object.assign(
+      new Error('实际出行日期与出发时刻日期不一致，请核对这两个字段。'),
+      {
+        code: 'DATE_MISMATCH',
+        fields: ['date', 'departure'],
+      },
+    );
   const begin = parseTime(trip.departure),
     end = parseTime(trip.arrival);
   if (Number.isFinite(begin) && Number.isFinite(end)) {
@@ -318,14 +351,18 @@ export function validateRecord(trip, others = []) {
       )
         throw new Error('历史线路标识无效。');
       versions.add(historical.id);
-      validateRecord({
-        ...trip,
-        ...historical,
-        id: trip.id,
-        mode: trip.mode,
-        number: trip.number,
-        routeHistory: [],
-      });
+      validateRecord(
+        {
+          ...trip,
+          ...historical,
+          id: trip.id,
+          mode: trip.mode,
+          number: trip.number,
+          routeHistory: [],
+        },
+        [],
+        { allowDateMismatch },
+      );
     }
   }
   if (trip.routeCandidate != null) {
@@ -336,29 +373,29 @@ export function validateRecord(trip, others = []) {
       candidate.routeCandidate != null
     )
       throw new Error('候选线路结构无效。');
-    validateRecord({
-      ...trip,
-      ...candidate,
-      id: trip.id,
-      mode: trip.mode,
-      number: trip.number,
-      routeHistory: [],
-      routeCandidate: null,
-    });
+    validateRecord(
+      {
+        ...trip,
+        ...candidate,
+        id: trip.id,
+        mode: trip.mode,
+        number: trip.number,
+        routeHistory: [],
+        routeCandidate: null,
+      },
+      [],
+      { allowDateMismatch },
+    );
   }
   return trip;
 }
 export function journeyKey(trip) {
-  const name = (value) =>
-    String(value || '')
-      .trim()
-      .replace(/国际|机场|(?:火车站|高铁站|站)$/g, '');
   return JSON.stringify([
     trip.mode,
-    String(trip.number).toUpperCase(),
-    trip.departure?.slice(0, 10) || trip.travelDate,
-    name(trip.from?.name),
-    name(trip.to?.name),
+    String(trip.number).trim().toUpperCase(),
+    actualTravelDate(trip),
+    journeyPlaceName(trip.from),
+    journeyPlaceName(trip.to),
   ]);
 }
 export function routeInputs(trip) {

@@ -22,6 +22,9 @@ import {
   routePreviewMarkup,
   fieldSourceLabel,
   rowNeedsReview,
+  routeIdentityFields,
+  restoreRouteReview,
+  routeReviewAccepted,
 } from './editor-draft.js';
 import {
   editorSession,
@@ -65,7 +68,9 @@ function newJournal(restored) {
 }
 export function initializeBatch(restored) {
   cancelBatch();
-  rows = restored?.rows ? structuredClone(restored.rows) : [];
+  rows = restored?.rows
+    ? structuredClone(restored.rows).map((row) => restoreRouteReview(row))
+    : [];
   for (const row of rows) {
     if (row.draft) row.draft = initializeDraft(row.draft);
     row.running = false;
@@ -108,7 +113,7 @@ function rowPending(row) {
     missingFields(row.draft).length > 0 ||
     !row.route ||
     row.route.resolution?.state === 'unavailable' ||
-    (needsRouteConfirmation(row.route) && !row.routeConfirmed) ||
+    (needsRouteConfirmation(row.route) && !routeReviewAccepted(row)) ||
     Boolean(row.candidates?.length)
   );
 }
@@ -165,7 +170,7 @@ function renderRow(row) {
     if (hasReferenceFields(draft, row.lookup))
       body.innerHTML += `<label class="batch-accept"><input data-reference type="checkbox" ${row.referenceAccepted ? 'checked' : ''}>我已核对参考日期与时刻</label>`;
     if (needsRouteConfirmation(row.route))
-      body.innerHTML += `<label class="batch-accept"><input data-route-confirm type="checkbox" ${row.routeConfirmed ? 'checked' : ''}>接受“停站连线示意”（不是已核实的真实轨道）</label>`;
+      body.innerHTML += `<label class="batch-accept"><input data-route-confirm type="checkbox" ${row.routeCandidateAccepted ? 'checked' : ''}>接受此候选示意线路（不是已核实的真实轨道）</label>`;
     body.innerHTML += `<details class="batch-coordinates"><summary>调整坐标与途经站</summary><div class="form-row">${field(row, 'fromCoord', '出发地经度,纬度')}${field(row, 'toCoord', '目的地经度,纬度')}</div>${field(row, 'via', '途经站（用顿号分隔）')}</details>`;
   } else
     body.innerHTML += `<textarea data-raw class="batch-raw-edit" aria-label="修正第 ${row.line} 行文本">${esc(row.raw)}</textarea>`;
@@ -221,6 +226,8 @@ async function prepareRoute(row, token, budget) {
     row.routeConfirmed =
       !needsRouteConfirmation(route) &&
       route.resolution?.state !== 'unavailable';
+    row.routeIsCandidate = needsRouteConfirmation(route);
+    row.routeCandidateAccepted = false;
     row.message =
       route.resolution?.state === 'unavailable'
         ? '暂未获得可靠线路，可以先保存为待补全。'
@@ -267,6 +274,8 @@ async function matchRow(row, token, overall) {
         route: null,
         routeKey: null,
         routeConfirmed: false,
+        routeIsCandidate: false,
+        routeCandidateAccepted: false,
         referenceAccepted: false,
         reviewed: false,
       },
@@ -427,7 +436,7 @@ async function confirmBatch() {
             ? row.route
             : null;
         const trip = await createTrip(row.draft, row.lookup, route, {
-          routeConfirmed: row.routeConfirmed,
+          routeConfirmed: routeReviewAccepted(row),
           referenceAccepted: row.referenceAccepted,
           groupId,
           fetchRoute: false,
@@ -484,7 +493,11 @@ function changeRow(row, key, value) {
   row.draft = updateDraftField(row.draft, key, value);
   row.error = '';
   row.reviewed = false;
-  row.routeConfirmed = false;
+  if (routeIdentityFields.includes(key)) {
+    row.routeConfirmed = false;
+    row.routeIsCandidate = false;
+    row.routeCandidateAccepted = false;
+  }
   if (['mode', 'number', 'date', 'from', 'to'].includes(key)) {
     row.lookup = null;
     row.route = null;
@@ -577,8 +590,7 @@ export function setupBatchEditor(options) {
     else if (target.matches('[data-reference]'))
       row.referenceAccepted = target.checked;
     else if (target.matches('[data-route-confirm]')) {
-      row.routeConfirmed = target.checked;
-      row.draft.routeConfirmed = target.checked;
+      row.routeCandidateAccepted = target.checked;
     } else if (target.matches('[data-candidate]')) {
       if (!target.value) return;
       if (target.value === 'manual') {
@@ -587,6 +599,8 @@ export function setupBatchEditor(options) {
         row.route = null;
         row.routeKey = null;
         row.routeConfirmed = false;
+        row.routeIsCandidate = false;
+        row.routeCandidateAccepted = false;
         row.referenceAccepted = false;
         row.needsResolve = false;
         row.warnings = [

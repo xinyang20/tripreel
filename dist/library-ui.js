@@ -2,6 +2,7 @@ import * as store from './store.js';
 import { canReplay, routeLabel, tripIssues } from './domain.js';
 import { tripDate } from './selectors.js';
 import { resumeDraft } from './editor.js';
+import { validateDraft } from './draft-validation.js';
 const { $, state, esc, status, toast } = store;
 let restorePreview, detailsId;
 const refresh = () => document.dispatchEvent(new Event('library-refresh'));
@@ -169,7 +170,7 @@ function drawRestore() {
     `同时恢复 ${restorePreview.groups?.length || 0} 个分组、${restorePreview.drafts?.length || 0} 份草稿及原始恢复材料（同 ID 内容保留现有）`;
   $('restore-include-extras').checked = true;
   $('restore-summary').textContent =
-    `${entries.filter((e) => e.kind === 'new').length} 条新增，${entries.filter((e) => e.kind === 'duplicate').length} 条重复，${entries.filter((e) => e.kind === 'conflict').length} 条冲突，${entries.filter((e) => e.kind === 'invalid').length} 条无效。`;
+    `${entries.filter((e) => e.kind === 'new').length} 条新增，${entries.filter((e) => e.kind === 'duplicate').length} 条重复，${entries.filter((e) => e.kind === 'conflict').length} 条冲突，${entries.filter((e) => e.kind === 'invalid').length} 条无效。${restorePreview.extraIssues?.length ? `另有 ${restorePreview.extraIssues.length} 份草稿无法继续，原内容将保存在恢复材料中。` : ''}`;
   $('restore-rows').innerHTML = entries
     .map((entry, index) => {
       const t = entry.incoming || {},
@@ -181,6 +182,12 @@ function drawRestore() {
         }[entry.kind];
       return `<div class="restore-row"><div><strong>${esc(t.number || '记录 ' + (index + 1))} · ${esc(label)}</strong><p>${esc(t.from?.name || '')} → ${esc(t.to?.name || '')} ${esc(tripDate(t))}</p>${entry.issues?.length ? `<small>${esc(entry.issues.map((i) => i.message || i).join('；'))}</small>` : ''}</div><select data-restore-key="${esc(entry.key)}" aria-label="处理 ${esc(t.number || '记录')}" ${['invalid', 'duplicate'].includes(entry.kind) ? 'disabled' : ''}><option value="skip">保留现有 / 跳过</option>${entry.kind === 'new' ? '<option value="add" selected>新增此记录</option>' : ''}${entry.kind === 'conflict' ? '<option value="replace">采用导入内容</option>' : ''}</select></div>`;
     })
+    .join('');
+  $('restore-rows').innerHTML += (restorePreview.extraIssues || [])
+    .map(
+      (issue) =>
+        `<div class="restore-row"><div><strong>草稿 ${issue.index + 1} · 已隔离</strong><p>${esc(issue.message)}</p></div></div>`,
+    )
     .join('');
 }
 export function setupLibraryUI({ filters, render }) {
@@ -273,8 +280,9 @@ export function setupLibraryUI({ filters, render }) {
     if (!draft) return;
     try {
       if (event.target.dataset.resume) {
+        const restored = validateDraft(draft);
         $('about').close();
-        await resumeDraft(draft);
+        await resumeDraft(restored);
       } else {
         await store.deleteDraft(id, draft.revision);
         renderLibraryUI(filters);

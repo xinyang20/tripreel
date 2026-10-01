@@ -8,6 +8,7 @@ import {
   routeQualityRank,
   ROUTE_FIELDS,
 } from './domain.js';
+import { validateDraft } from './draft-validation.js';
 
 export const LEGACY_KEY = 'travel-trace.v1';
 const STORES = ['meta', 'trips', 'routes', 'drafts', 'groups', 'rescue'];
@@ -73,15 +74,26 @@ function content(trip) {
         : item;
   return JSON.stringify(canonical(value));
 }
-function checkSet(trips) {
+function checkSet(
+  trips,
+  changedIds = new Set(trips.map((trip) => trip.id)),
+  { allowDateMismatch = false } = {},
+) {
   const ids = new Set(),
-    keys = new Set();
+    keys = new Map();
   for (const trip of trips) {
-    validateRecord(trip, trips);
-    if (ids.has(trip.id) || keys.has(journeyKey(trip)))
+    const changed = changedIds.has(trip.id),
+      key = journeyKey(trip);
+    validateRecord(trip, changed ? trips : [], {
+      allowDateMismatch: allowDateMismatch || !changed,
+    });
+    if (
+      ids.has(trip.id) ||
+      (keys.has(key) && (changed || changedIds.has(keys.get(key))))
+    )
       throw new Error(`行程 ${trip.number} 重复，请核对。`);
     ids.add(trip.id);
-    keys.add(journeyKey(trip));
+    if (!keys.has(key) || changed) keys.set(key, trip.id);
   }
 }
 function split(trip) {
@@ -359,7 +371,7 @@ export function createRepository({
             let trip;
             try {
               if (!raw?.id) throw new Error('缺少行程标识。');
-              validateRecord(raw);
+              validateRecord(raw, [], { allowDateMismatch: true });
               trip = normalizeTrip(raw);
               if (
                 valid.some(
@@ -369,7 +381,7 @@ export function createRepository({
                 throw new Error('旧记录存在重复标识或旅程。');
               trip.revision = 1;
               trip.routeRevision = canRenderRoute(trip) ? 1 : 0;
-              validateRecord(trip);
+              validateRecord(trip, [], { allowDateMismatch: true });
               valid.push(trip);
             } catch (error) {
               await request(
@@ -488,7 +500,7 @@ export function createRepository({
           map.set(next.id, next);
           saved.push(next);
         }
-        checkSet([...map.values()]);
+        checkSet([...map.values()], seen);
         if (draftId) {
           const draft = await request(stores.drafts.get(draftId));
           if (!draft) throw conflict('草稿已在其他页面删除。');
@@ -598,7 +610,7 @@ export function createRepository({
           merged.legs = route?.legs || [];
           merged.routeConfirmed = true;
           resolved = normalizeTrip(merged);
-          validateRecord(resolved);
+          validateRecord(resolved, [], { allowDateMismatch: true });
           if (
             !canRenderRoute(resolved) ||
             route?.quality === 'pending' ||
@@ -662,7 +674,7 @@ export function createRepository({
             archive(current),
             ...current.routeHistory,
           ]);
-        validateRecord(next);
+        validateRecord(next, [], { allowDateMismatch: true });
         await write(stores, next);
         return true;
       },
@@ -744,7 +756,7 @@ export function createRepository({
         ...current.routeHistory.filter((route) => route.id !== versionId),
       ]);
       next.lastRouteAttempt = routeAttempt();
-      validateRecord(next);
+      validateRecord(next, [], { allowDateMismatch: true });
       await write(stores, next);
       return next;
     });
@@ -782,7 +794,7 @@ export function createRepository({
       entries = data.trips.map((raw, index) => {
         const key = String(index);
         try {
-          validateRecord(raw);
+          validateRecord(raw, [], { allowDateMismatch: true });
           const incoming = normalizeTrip(raw);
           if (seen.has(incoming.id))
             throw new Error('备份中存在重复行程标识。');
@@ -799,7 +811,9 @@ export function createRepository({
               : 'new',
             incoming,
             existing: found || null,
-            issues: [],
+            issues: incoming.issues.filter(
+              (issue) => issue.code === 'date-mismatch',
+            ),
           };
         } catch (error) {
           return {
@@ -817,13 +831,44 @@ export function createRepository({
           };
         }
       });
+    const drafts = [],
+      extraIssues = [];
+    const draftInputs = Array.isArray(data.drafts)
+      ? data.drafts
+      : data.drafts == null
+        ? []
+        : [data.drafts];
+    const draftIds = new Set();
+    for (const [index, raw] of draftInputs.entries()) {
+      try {
+        const draft = validateDraft(raw);
+        if (draftIds.has(draft.id)) throw new Error('备份中草稿标识重复。');
+        draftIds.add(draft.id);
+        drafts.push(draft);
+      } catch (error) {
+        extraIssues.push({ kind: 'draft', index, message: error.message, raw });
+      }
+    }
+    const recovery = extraIssues.length
+      ? {
+          ...(data.recovery || {}),
+          items: [
+            ...(data.recovery?.items || []),
+            ...extraIssues.map((issue) => ({
+              reason: issue.message,
+              raw: issue.raw,
+            })),
+          ],
+        }
+      : data.recovery || null;
     return {
       format: 'travel-trace-restore-preview',
       datasetRevision: existing.datasetRevision,
       entries,
       groups: Array.isArray(data.groups) ? safeData(data.groups) : [],
-      drafts: Array.isArray(data.drafts) ? safeData(data.drafts) : [],
-      recovery: data.recovery || null,
+      drafts,
+      extraIssues,
+      recovery,
     };
   }
   async function applyRestore(preview, selections = {}) {
@@ -845,7 +890,7 @@ export function createRepository({
         if (action === 'skip') continue;
         if (!['add', 'replace'].includes(action) || entry.kind === 'invalid')
           throw new Error('恢复选择无效，请修正问题项。');
-        validateRecord(entry.incoming);
+        validateRecord(entry.incoming, [], { allowDateMismatch: true });
         const incoming = normalizeTrip(safeData(entry.incoming)),
           current = entry.existing
             ? map.get(entry.existing.id)
@@ -869,7 +914,9 @@ export function createRepository({
         map.set(next.id, next);
         saved.push(next);
       }
-      checkSet([...map.values()]);
+      checkSet([...map.values()], new Set(saved.map((trip) => trip.id)), {
+        allowDateMismatch: true,
+      });
       for (const raw of preview.groups) {
         if (
           typeof raw.id !== 'string' ||
@@ -887,8 +934,7 @@ export function createRepository({
         await write(stores, trip);
       }
       for (const raw of preview.drafts) {
-        const draft = safeData(raw);
-        if (typeof draft.id !== 'string') throw new Error('备份草稿无效。');
+        const draft = validateDraft(safeData(raw));
         if (!(await request(stores.drafts.get(draft.id))))
           await request(stores.drafts.put({ ...draft, revision: 1 }));
       }

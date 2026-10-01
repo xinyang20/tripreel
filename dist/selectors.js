@@ -1,12 +1,7 @@
 import { parseTime } from './core.js';
-import { canRenderRoute, canReplay } from './domain.js';
+import { canRenderRoute, canReplay, actualTravelDate } from './domain.js';
 
-export const tripDate = (trip) =>
-  trip.travelDate ||
-  trip.departure?.slice(0, 10) ||
-  trip.date ||
-  trip.queryDate ||
-  '';
+export const tripDate = actualTravelDate;
 export function filterTrips(trips, filters = {}) {
   const search = String(filters.search || '')
     .trim()

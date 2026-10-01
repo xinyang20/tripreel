@@ -1,22 +1,8 @@
 // A duplicate is the same transport, service, requested day and actual endpoints.
 // Times may have changed in today's reference schedule; do not add it again.
-const name = (value) =>
-  String(value?.name || value || '')
-    .trim()
-    .replace(/站$/, '')
-    .replace(/国际机场$|机场$/, '');
+import { journeyKey } from './domain.js';
 export function sameJourney(draft, trip) {
-  return (
-    draft.mode === trip.mode &&
-    String(draft.number).toUpperCase() === String(trip.number).toUpperCase() &&
-    (trip.travelDate ||
-      trip.departure?.slice(0, 10) ||
-      trip.date ||
-      trip.queryDate) ===
-      (draft.travelDate || draft.departure?.slice(0, 10) || draft.date) &&
-    name(draft.from) === name(trip.from) &&
-    name(draft.to) === name(trip.to)
-  );
+  return journeyKey(draft) === journeyKey(trip);
 }
 export function routeRequest(draft, lookup) {
   let via = draft.via || '';

@@ -1,4 +1,16 @@
 import { coordinate, flightArc, localDateTime, parseTime } from './core.js';
+import { canRenderRoute, extractRoute, hasDateMismatch } from './domain.js';
+
+export const routeIdentityFields = [
+  'mode',
+  'number',
+  'date',
+  'from',
+  'to',
+  'via',
+  'fromCoord',
+  'toCoord',
+];
 
 export const sourceOf = (draft, key) => {
   const entry = draft.fieldSources?.[key];
@@ -77,13 +89,17 @@ export function updateDraftField(input, key, value) {
   draft[key] = key === 'number' ? String(value).toUpperCase().trim() : value;
   draft.fieldSources[key] = { source: 'manual' };
   if (old === draft[key]) return draft;
-  draft.routeConfirmed = false;
+  if (routeIdentityFields.includes(key)) draft.routeConfirmed = false;
   if (key === 'date') {
     draft.travelDate = value;
     const delta = parseTime(`${value}T00:00`) - parseTime(`${old}T00:00`);
+    const mismatchedDeparture =
+      Number.isFinite(parseTime(draft.departure)) &&
+      hasDateMismatch({ travelDate: old, departure: draft.departure });
     for (const field of ['departure', 'arrival']) {
       if (isAutomatic(draft, field)) delete draft[field];
       else if (
+        !mismatchedDeparture &&
         Number.isFinite(delta) &&
         Number.isFinite(parseTime(draft[field]))
       )
@@ -126,6 +142,8 @@ export function chooseCandidate(row, candidate) {
     route: null,
     routeKey: null,
     routeConfirmed: false,
+    routeIsCandidate: false,
+    routeCandidateAccepted: false,
     referenceAccepted: false,
     reviewed: false,
     error: '',
@@ -150,8 +168,60 @@ export const missingFields = (draft) =>
 export const needsRouteConfirmation = (route) =>
   Boolean(
     route?.requiresConfirmation ||
-    route?.resolution?.state === 'needs-confirmation',
+    route?.resolution?.requiresConfirmation ||
+    route?.resolution?.state === 'needs-confirmation' ||
+    ['station-schematic', 'manual-schematic'].includes(route?.quality),
   );
+const sameRouteContent = (a, b) =>
+  Boolean(
+    a &&
+    b &&
+    JSON.stringify(extractRoute(a)) === JSON.stringify(extractRoute(b)),
+  );
+// An existing main route never grants permission to adopt a different candidate.
+export function routeReviewFromTrip(trip) {
+  const candidate =
+      trip?.routeCandidate ||
+      (trip?.routeState === 'ready' &&
+      needsRouteConfirmation(trip) &&
+      trip.routeConfirmed !== true
+        ? extractRoute(trip)
+        : null),
+    route = candidate || (trip?.routeState === 'ready' ? trip : null);
+  return {
+    route: structuredClone(route || null),
+    routeConfirmed: !candidate && trip?.routeConfirmed === true,
+    routeIsCandidate: Boolean(candidate),
+    routeCandidateAccepted: false,
+  };
+}
+export function restoreRouteReview(row, original) {
+  if (typeof row.routeIsCandidate === 'boolean')
+    return {
+      ...row,
+      routeCandidateAccepted: row.routeCandidateAccepted === true,
+    };
+  // Older drafts used the main route's flag for a candidate; require a new choice.
+  const routeIsCandidate = Boolean(
+    row.route &&
+    needsRouteConfirmation(row.route) &&
+    !(
+      original &&
+      canRenderRoute(original) &&
+      sameRouteContent(row.route, original)
+    ),
+  );
+  return {
+    ...row,
+    routeIsCandidate,
+    routeCandidateAccepted: false,
+    routeConfirmed: routeIsCandidate ? false : row.routeConfirmed === true,
+  };
+}
+export const routeReviewAccepted = (row) =>
+  row.routeIsCandidate
+    ? row.routeCandidateAccepted === true
+    : row.routeConfirmed === true;
 export const hasReferenceFields = (draft, lookup) =>
   Boolean(
     draft?.isReference ||
@@ -171,7 +241,7 @@ export function rowNeedsReview(row) {
       missingFields(row.draft).length ||
       row.route?.resolution?.state === 'unavailable' ||
       (hasReferenceFields(row.draft, row.lookup) && !row.referenceAccepted) ||
-      (needsRouteConfirmation(row.route) && !row.routeConfirmed)),
+      (needsRouteConfirmation(row.route) && !routeReviewAccepted(row))),
   );
 }
 export function clearAutomaticTimes(input) {
@@ -215,12 +285,7 @@ export const editorFields = [
 ];
 const fieldValue = (draft, key) => String(draft?.[key] ?? '').trim();
 const routeIdentity = (draft) =>
-  JSON.stringify(
-    editorFields
-      .map(([key]) => key)
-      .filter((key) => !['departure', 'arrival'].includes(key))
-      .map((key) => fieldValue(draft, key)),
-  );
+  JSON.stringify(routeIdentityFields.map((key) => fieldValue(draft, key)));
 
 export function editorConflictDifferences(row, current) {
   const latest = current ? draftFromTrip(current) : null;
@@ -272,25 +337,15 @@ export function rebaseEditorRow(row, base, current) {
         delete draft.fieldSources[key];
       }
   const reuseRoute = routeIdentity(draft) === routeIdentity(latest),
-    route = reuseRoute
-      ? structuredClone(
-          current.routeState === 'ready'
-            ? current
-            : current.routeCandidate || null,
-        )
-      : null;
+    review = routeReviewFromTrip(reuseRoute ? current : null);
   return {
     ...row,
     draft,
     lookup,
     candidates: [],
     conflict: null,
-    route,
+    ...review,
     routeKey: null,
-    routeConfirmed:
-      reuseRoute &&
-      current.routeState === 'ready' &&
-      current.routeConfirmed !== false,
     referenceAccepted: hasReferenceFields(draft, lookup)
       ? sameLookupIdentity
         ? Boolean(row.referenceAccepted)
@@ -324,18 +379,35 @@ export function tripFromDraft(
       discardAutomaticTimes(draft);
     }
   }
+  const reuseOriginal = Boolean(
+      original &&
+      routeIdentity(draft) === routeIdentity(draftFromTrip(original)),
+    ),
+    retainedRoute = reuseOriginal && canRenderRoute(original) ? original : null;
   const routeReady =
     route &&
     route.routeState !== 'pending' &&
     route.quality !== 'pending' &&
     route.resolution?.state !== 'unavailable' &&
     (!needsRouteConfirmation(route) || routeConfirmed);
+  const selectedRoute = routeReady ? route : retainedRoute,
+    effective = selectedRoute ? extractRoute(selectedRoute) : {},
+    sameMainRoute =
+      routeReady && retainedRoute && sameRouteContent(route, retainedRoute),
+    pendingCandidate =
+      !routeReady && route
+        ? extractRoute(route)
+        : reuseOriginal && (!routeReady || sameMainRoute)
+          ? structuredClone(original.routeCandidate || null)
+          : null;
   const place = (key, name) => {
-    const found = route?.[key]?.name
-      ? route[key]
-      : original?.[key]?.name === name
-        ? original[key]
-        : { name, coord: null };
+    const found = selectedRoute?.[key]?.name
+      ? selectedRoute[key]
+      : !selectedRoute && route?.[key]?.name
+        ? route[key]
+        : original?.[key]?.name === name
+          ? original[key]
+          : { name, coord: null };
     return {
       ...found,
       name: found.name || name,
@@ -346,7 +418,6 @@ export function tripFromDraft(
   };
   const fromPlace = place('from', from),
     toPlace = place('to', to);
-  const effective = routeReady ? structuredClone(route) : {};
   const fieldSources = structuredClone(draft.fieldSources),
     reference = hasReferenceFields(draft, lookup);
   let source = previous.source || '手动填写';
@@ -383,9 +454,10 @@ export function tripFromDraft(
     via: effective.via ?? draft.via ?? '',
     fromStopIndex: draft.fromStopIndex,
     toStopIndex: draft.toStopIndex,
-    routeState: routeReady ? 'ready' : 'pending',
-    routeConfirmed:
-      routeReady && (!needsRouteConfirmation(route) || routeConfirmed),
+    routeState: selectedRoute ? 'ready' : 'pending',
+    routeConfirmed: routeReady
+      ? !needsRouteConfirmation(route) || routeConfirmed
+      : retainedRoute?.routeConfirmed === true,
     routeRevision: original?.routeRevision || 0,
     routeFrozen: original?.routeFrozen || false,
     routeHistory: structuredClone(original?.routeHistory || []),
@@ -395,11 +467,12 @@ export function tripFromDraft(
     distance: effective.distance ?? null,
     quality: effective.quality || 'pending',
     routeTiming: effective.routeTiming || 'continuous',
-    resolution: route?.resolution || {
-      state: 'unavailable',
-      reason: '路线尚未匹配，可稍后补全。',
-    },
-    routeCandidate: !routeReady && route ? structuredClone(route) : null,
+    resolution: effective.resolution ||
+      route?.resolution || {
+        state: 'unavailable',
+        reason: '路线尚未匹配，可稍后补全。',
+      },
+    routeCandidate: pendingCandidate,
     isReference: reference,
     referenceDate: lookup?.referenceDate || draft.referenceDate || null,
     referenceAccepted: reference ? Boolean(referenceAccepted) : true,
@@ -407,7 +480,7 @@ export function tripFromDraft(
     queriedAt: lookup?.fetchedAt || null,
     issues: [
       ...(route?.issues || route?.resolution?.issues || []),
-      ...(routeReady
+      ...(selectedRoute
         ? []
         : [
             {

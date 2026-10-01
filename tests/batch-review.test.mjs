@@ -55,7 +55,8 @@ test('同日同车次同起止使用请求日期或实际出发日期识别重�
       departure: undefined,
       queryDate: '2030-02-03',
     }),
-    true,
+    false,
+    '始发查询日期不能替代未知的实际出行日期',
   );
   assert.equal(
     sameJourney(draft, {

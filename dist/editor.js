@@ -10,7 +10,8 @@ import {
   toast,
 } from './store.js';
 import { chinaToday } from './core.js';
-import { normalizeTrip, validateRecord } from './domain.js';
+import { normalizeTrip, validateRecord, canRenderRoute } from './domain.js';
+import { validateDraft } from './draft-validation.js';
 import {
   setupBatchEditor,
   isBatchBusy,
@@ -33,6 +34,10 @@ import {
   fieldSourceLabel,
   editorConflictDifferences,
   rebaseEditorRow,
+  routeIdentityFields,
+  routeReviewFromTrip,
+  restoreRouteReview,
+  routeReviewAccepted,
 } from './editor-draft.js';
 import {
   editorSession,
@@ -178,14 +183,20 @@ function renderSingleReview() {
   review.replaceChildren();
   if (single.warnings?.length)
     review.innerHTML += `<ul class="batch-warnings">${[...new Set(single.warnings)].map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul>`;
+  if (single.routeIsCandidate && original && canRenderRoute(original)) {
+    review.innerHTML += '<p class="field-hint">当前已确认线路</p>';
+    review.innerHTML += routePreviewMarkup(original, single.draft.mode);
+    review.innerHTML +=
+      '<p class="field-hint">以下为待确认候选；未接受时继续保留当前线路。</p>';
+  }
   if (single.route)
     review.innerHTML += routePreviewMarkup(single.route, single.draft.mode);
   if (single.candidates?.length)
     review.innerHTML += `<label>选择运行区间<select id="single-candidate"><option value="">尚未选择，可先保存为待补全</option>${single.candidates.map((candidate, index) => `<option value="${index}">${esc(candidate.label)}</option>`).join('')}<option value="manual">保留原起止地点，手动核对时刻</option></select></label>`;
   if (hasReferenceFields(single.draft, single.lookup))
     review.innerHTML += `<label class="batch-accept"><input id="single-reference-accept" type="checkbox" ${single.referenceAccepted ? 'checked' : ''}>我已核对参考日期与时刻</label>`;
-  if (needsRouteConfirmation(single.route))
-    review.innerHTML += `<label class="batch-accept"><input id="single-route-confirm" type="checkbox" ${single.routeConfirmed ? 'checked' : ''}>接受“停站连线示意”（不是已核实的真实轨道）</label>`;
+  if (single.routeIsCandidate && needsRouteConfirmation(single.route))
+    review.innerHTML += `<label class="batch-accept"><input id="single-route-confirm" type="checkbox" ${single.routeCandidateAccepted ? 'checked' : ''}>接受此候选示意线路（不是已核实的真实轨道）</label>`;
   review.innerHTML += `<p class="field-hint">${esc(single.message || '地点和日期确认后即可保存；时刻、坐标或路线可稍后补全。')}</p>`;
   renderConflict(review);
   if ($('single-reference-accept'))
@@ -195,8 +206,7 @@ function renderSingleReview() {
     };
   if ($('single-route-confirm'))
     $('single-route-confirm').onchange = (event) => {
-      single.routeConfirmed = event.target.checked;
-      single.draft.routeConfirmed = event.target.checked;
+      single.routeCandidateAccepted = event.target.checked;
       persistSingle();
     };
   if ($('single-candidate'))
@@ -213,6 +223,8 @@ function renderSingleReview() {
           '已保留原起止地点。未采用查询航段，可先保存或手动核对时刻。',
         ];
         single.routeConfirmed = false;
+        single.routeIsCandidate = false;
+        single.routeCandidateAccepted = false;
         single.referenceAccepted = false;
         populateSingle();
         persistSingle();
@@ -305,12 +317,7 @@ async function resolveConflict(useCurrent) {
         lookup: null,
         candidates: [],
         warnings: [],
-        route: structuredClone(
-          current.routeState === 'ready'
-            ? current
-            : current.routeCandidate || null,
-        ),
-        routeConfirmed: current.routeConfirmed === true,
+        ...routeReviewFromTrip(current),
         referenceAccepted: current.referenceAccepted ?? !current.isReference,
         needsResolve: false,
         message: '已采用数据库最新版本，可继续编辑后保存。',
@@ -339,6 +346,10 @@ async function resolveConflict(useCurrent) {
   }
 }
 export function openEditor(batch = false, trip, restored) {
+  if (restored) {
+    restored = validateDraft(restored);
+    batch = restored.kind === 'batch';
+  }
   pause();
   stopSingle();
   cancelBatch();
@@ -375,18 +386,13 @@ export function openEditor(batch = false, trip, restored) {
             'manual',
           ));
     single = restored?.row
-      ? structuredClone(restored.row)
+      ? restoreRouteReview(structuredClone(restored.row), original)
       : {
           draft,
           lookup: null,
           candidates: [],
           warnings: [],
-          route: trip?.routeCandidate
-            ? structuredClone(trip.routeCandidate)
-            : trip?.routeState === 'ready'
-              ? structuredClone(trip)
-              : null,
-          routeConfirmed: trip?.routeConfirmed ?? false,
+          ...routeReviewFromTrip(trip),
           referenceAccepted: trip?.referenceAccepted ?? !trip?.isReference,
           needsResolve: !trip,
         };
@@ -413,9 +419,15 @@ function editField(key, value) {
   stopSingle({ flush: false });
   editorSession.cancel();
   single.draft = updateDraftField(single.draft, key, value);
+  for (const field of Object.values(ids))
+    $(field).removeAttribute('aria-invalid');
   if (ids[key])
     $(ids[key]).title = `来源：${fieldSourceLabel(single.draft, key)}`;
-  single.routeConfirmed = false;
+  if (routeIdentityFields.includes(key)) {
+    single.routeConfirmed = false;
+    single.routeIsCandidate = false;
+    single.routeCandidateAccepted = false;
+  }
   single.error = '';
   single.reviewed = false;
   if (['mode', 'number', 'date', 'from', 'to'].includes(key)) {
@@ -467,6 +479,8 @@ async function fetchSingleRoute(token, budget) {
     single.routeConfirmed =
       !needsRouteConfirmation(route) &&
       route.resolution?.state !== 'unavailable';
+    single.routeIsCandidate = needsRouteConfirmation(route);
+    single.routeCandidateAccepted = false;
     single.needsResolve = false;
     single.message =
       route.resolution?.state === 'unavailable'
@@ -516,6 +530,7 @@ async function lookupSingle() {
   $('lookup').disabled = true;
   single.draft = clearAutomaticTimes(single.draft);
   single.routeConfirmed = false;
+  single.routeCandidateAccepted = false;
   single.referenceAccepted = false;
   status(
     'lookup-status',
@@ -535,7 +550,14 @@ async function lookupSingle() {
     if (!editorSession.current(token)) return;
     Object.assign(
       single,
-      { candidates: [], route: null, routeKey: null, needsResolve: false },
+      {
+        candidates: [],
+        route: null,
+        routeKey: null,
+        routeIsCandidate: false,
+        routeCandidateAccepted: false,
+        needsResolve: false,
+      },
       result,
     );
     populateSingle();
@@ -601,7 +623,7 @@ async function saveSingle(event) {
         : null;
     const trip = await createTrip(single.draft, single.lookup, route, {
       original,
-      routeConfirmed: single.routeConfirmed,
+      routeConfirmed: routeReviewAccepted(single),
       referenceAccepted: single.referenceAccepted,
       groupId,
       fetchRoute: false,
@@ -632,6 +654,11 @@ async function saveSingle(event) {
     );
   } catch (error) {
     if (editorSession.current(token)) {
+      if (error.code === 'DATE_MISMATCH') {
+        for (const key of error.fields || ['date', 'departure'])
+          if (ids[key]) $(ids[key]).setAttribute('aria-invalid', 'true');
+        $('trip-date').focus();
+      }
       if (error.code === 'CONFLICT' && original?.id) {
         try {
           await captureConflict(error, token);
