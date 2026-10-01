@@ -145,24 +145,38 @@ export function validateTrip(trip, others = []) {
   }
   return trip;
 }
-export function timetableTimes(stops, date) {
+export function timetableTimes(stops, date, { onInvalidTime = () => {} } = {}) {
   let day = 0,
     last = -1;
   return stops.map((s, i) => {
-    const record = { ...s };
+    const record = { ...s },
+      invalid = new Set();
+    delete record.arrival;
+    delete record.departure;
     for (const [field, key] of [
       ['arrive_time', 'arrival'],
       ['start_time', 'departure'],
     ]) {
       const value = s[field];
-      if (!/^\d\d:\d\d$/.test(value || '')) continue;
+      if (value == null || value === '' || /^[-:]+$/.test(value)) continue;
+      if (
+        typeof value !== 'string' ||
+        !/^\d\d:\d\d$/.test(value) ||
+        !Number.isFinite(parseTime(`${date}T${value}`))
+      ) {
+        invalid.add(key);
+        onInvalidTime({ stopIndex: i, field: key });
+        continue;
+      }
       const min = Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
       if (min < last) day++;
       record[key] = `${addDays(date, day)}T${value}`;
       last = min;
     }
-    if (!record.arrival) record.arrival = record.departure;
-    if (!record.departure) record.departure = record.arrival;
+    if (!record.arrival && !invalid.has('arrival'))
+      record.arrival = record.departure;
+    if (!record.departure && !invalid.has('departure'))
+      record.departure = record.arrival;
     return record;
   });
 }

@@ -33,6 +33,52 @@ test('列车跨午夜到达和跨午夜停靠', () => {
   assert.equal(rows[1].departure, '2026-09-22T00:02');
   assert.equal(rows[2].arrival, '2026-09-22T01:40');
 });
+test('非法列车时刻留空且不改变跨日游标，正常占位保留兼容', () => {
+  const warnings = [];
+  const rows = timetableTimes(
+    [
+      { arrive_time: '----', start_time: '25:99' },
+      { arrive_time: '08:00', start_time: '12:60' },
+      { arrive_time: '09:00', start_time: '09:05' },
+      { arrive_time: '23:58', start_time: '24:10' },
+      { arrive_time: '00:02', start_time: '--:--' },
+    ],
+    '2026-09-21',
+    { onInvalidTime: (item) => warnings.push(item) },
+  );
+  assert.equal(rows[0].arrival, undefined);
+  assert.equal(rows[0].departure, undefined);
+  assert.equal(rows[1].arrival, '2026-09-21T08:00');
+  assert.equal(rows[1].departure, undefined);
+  assert.equal(rows[2].arrival, '2026-09-21T09:00');
+  assert.equal(rows[3].departure, undefined);
+  assert.equal(rows[4].arrival, '2026-09-22T00:02');
+  assert.equal(rows[4].departure, rows[4].arrival);
+  assert.deepEqual(warnings, [
+    { stopIndex: 0, field: 'departure' },
+    { stopIndex: 1, field: 'departure' },
+    { stopIndex: 3, field: 'departure' },
+  ]);
+});
+test('非法格式与缺时刻不会复用来源中的派生时刻字段', () => {
+  const warnings = [];
+  const rows = timetableTimes(
+    [
+      { arrive_time: 'bad', start_time: '09:00', arrival: 'stale' },
+      { arrive_time: 1000, start_time: '9:05', departure: 'stale' },
+      { arrive_time: null, start_time: '' },
+    ],
+    '2026-09-21',
+    { onInvalidTime: (item) => warnings.push(item) },
+  );
+  assert.equal(rows[0].arrival, undefined);
+  assert.equal(rows[0].departure, '2026-09-21T09:00');
+  assert.equal(rows[1].arrival, undefined);
+  assert.equal(rows[1].departure, undefined);
+  assert.equal(rows[2].arrival, undefined);
+  assert.equal(rows[2].departure, undefined);
+  assert.equal(warnings.length, 3);
+});
 test('批量解析交通类型以及显式跨日', () => {
   const rows = parseBatch(
     '2026-09-21 G2\n2026-09-22 CA1831 PEK XMN 23:10 +1 01:20',

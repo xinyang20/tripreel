@@ -264,6 +264,11 @@ export async function resolveBatchDraft(
   }
   if (!lookup) return finish(result);
   result.lookup = lookup;
+  warnings.push(
+    ...(Array.isArray(lookup.warnings)
+      ? lookup.warnings.filter((message) => typeof message === 'string')
+      : []),
+  );
   if (lookup.isReference)
     warnings.push(
       lookup.note ||
@@ -322,6 +327,11 @@ export async function resolveBatchDraft(
           lookup = checked;
           pairs = checkedPairs;
           result.lookup = lookup;
+          warnings.push(
+            ...(Array.isArray(lookup.warnings)
+              ? lookup.warnings.filter((message) => typeof message === 'string')
+              : []),
+          );
           warnings.push(
             `已按实际乘车日 ${draft.date} 复核：该列车的始发查询日为 ${queryDate}。`,
           );

@@ -47,6 +47,7 @@ function provider({
   missingCoord = false,
   oldDateFails = false,
   repeated = false,
+  timetable,
 } = {}) {
   const calls = [];
   const fetchImpl = async (url) => {
@@ -69,13 +70,15 @@ function provider({
     if (parsed.pathname.includes('queryByTrainNo'))
       return response({
         data: {
-          data: (repeated ? ['甲', '乙', '甲', '丙'] : ['甲', '乙', '丙']).map(
-            (name, i) => ({
-              station_name: name,
-              arrive_time: `0${i + 7}:00`,
-              start_time: `0${i + 7}:05`,
-            }),
-          ),
+          data:
+            timetable ||
+            (repeated ? ['甲', '乙', '甲', '丙'] : ['甲', '乙', '丙']).map(
+              (name, i) => ({
+                station_name: name,
+                arrive_time: `0${i + 7}:00`,
+                start_time: `0${i + 7}:05`,
+              }),
+            ),
         },
       });
     if (parsed.pathname.includes('mapLine'))
@@ -175,6 +178,160 @@ test('真实线路优先，几何缺失通用停站候选保留来源，缺坐�
   assert.equal(pending.data.resolution.state, 'unavailable');
   assert.match(pending.data.resolution.message, /乙.*缺少/);
   assert.equal(pending.data.distance, null);
+});
+
+test('非法来源时刻保留停站和警告，路线响应继续传递来源异常', async (t) => {
+  const { api } = await localServer(
+    t,
+    provider({
+      timetable: [
+        { station_name: '甲', arrive_time: '----', start_time: '25:99' },
+        { station_name: '乙', arrive_time: '08:00', start_time: '12:60' },
+        { station_name: '丙', arrive_time: '09:00', start_time: '----' },
+      ],
+    }),
+  );
+  const lookup = await api('/api/train?number=K1&date=2026-09-26');
+  assert.equal(lookup.status, 200);
+  assert.equal(lookup.data.stops.length, 3);
+  assert.equal(lookup.data.stops[0].departure, undefined);
+  assert.equal(lookup.data.stops[1].arrival, '2026-09-26T08:00');
+  assert.equal(lookup.data.stops[1].departure, undefined);
+  assert.equal(lookup.data.stops[2].arrival, '2026-09-26T09:00');
+  assert.equal(lookup.data.warningDetails.length, 2);
+  assert.ok(
+    lookup.data.warningDetails.every(
+      (item) =>
+        item.code === 'INVALID_TIMETABLE_TIME' && item.scope === 'schedule',
+    ),
+  );
+  assert.match(lookup.data.note, /12306.*时刻无效/);
+  const route = await api('/api/route', {
+    mode: 'train',
+    number: 'K1',
+    date: '2026-09-26',
+    from: '甲',
+    to: '丙',
+  });
+  assert.equal(route.data.quality, 'station-schematic');
+  assert.equal(
+    route.data.warningDetails.filter(
+      (item) => item.code === 'INVALID_TIMETABLE_TIME',
+    ).length,
+    2,
+  );
+});
+
+test('整张停站表没有有效时刻时结构化失败且后续恢复不受失败缓存影响', async (t) => {
+  let attempts = 0;
+  const valid = provider();
+  const { api } = await localServer(t, {
+    fetchImpl: async (url) => {
+      if (String(url).includes('queryByTrainNo') && ++attempts === 1)
+        return response({
+          data: {
+            data: [
+              { station_name: '甲', start_time: '24:10' },
+              { station_name: '丙', arrive_time: '12:60' },
+            ],
+          },
+        });
+      return valid.fetchImpl(url);
+    },
+  });
+  const failed = await api('/api/train?number=K1&date=2026-09-26');
+  assert.equal(failed.status, 404);
+  assert.equal(failed.data.code, 'NO_TIMETABLE');
+  assert.equal(failed.data.retryable, true);
+  assert.match(failed.data.error, /没有可用时刻/);
+  const recovered = await api('/api/train?number=K1&date=2026-09-26');
+  assert.equal(recovered.status, 200);
+  assert.equal(recovered.data.stops[0].departure, '2026-09-26T07:05');
+  assert.equal(attempts, 2);
+});
+
+test('RailGo 空结果与异常坐标不缓存，异常几何保留本次停站候选并允许恢复', async (t) => {
+  const complete = await (
+    await provider({ emptyTrack: false }).fetchImpl(
+      'https://rg-api.zenglingkun.cn/api/v2/mapLine?train=K1',
+    )
+  ).json();
+  for (const [name, data, quality] of [
+    ['empty', { stations: [], train: {} }, 'pending'],
+    [
+      'coordinates',
+      { stations: [{ 甲: [0, 0] }, { 丙: [112, 32] }], train: {} },
+      'pending',
+    ],
+    [
+      'geometry',
+      {
+        ...complete.data,
+        train: {
+          bad: {
+            index: 0,
+            line: [
+              [0, 0],
+              [112, 32],
+            ],
+          },
+        },
+      },
+      'station-schematic',
+    ],
+    ['shape', { ...complete.data, train: [] }, 'station-schematic'],
+  ]) {
+    await t.test(name, async (t) => {
+      let attempts = 0;
+      const { api } = await localServer(t, {
+        fetchImpl: async () =>
+          response(++attempts === 1 ? { success: true, data } : complete),
+      });
+      const body = { mode: 'train', number: 'K1', from: '甲', to: '丙' };
+      const first = (await api('/api/route', body)).data;
+      assert.equal(first.quality, quality);
+      if (quality === 'pending')
+        assert.equal(first.resolution.code, 'UPSTREAM_FORMAT');
+      else assert.equal(first.requiresConfirmation, true);
+      assert.equal((await api('/api/route', body)).data.quality, 'latest');
+      assert.equal((await api('/api/route', body)).data.quality, 'latest');
+      assert.equal(attempts, 2);
+    });
+  }
+});
+
+test('合法的 RailGo 停站候选继续缓存，轨道缺口只影响经过缺口的区间', async (t) => {
+  const upstream = provider();
+  const { api } = await localServer(t, upstream);
+  const body = { mode: 'train', number: 'K1', from: '甲', to: '丙' };
+  assert.equal(
+    (await api('/api/route', body)).data.quality,
+    'station-schematic',
+  );
+  assert.equal(
+    (await api('/api/route', body)).data.quality,
+    'station-schematic',
+  );
+  assert.equal(upstream.calls.length, 1);
+  const fixture = JSON.parse(
+    await readFile(
+      new URL('./fixtures/g1802-railgo.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  const full = await localServer(t, {
+    fetchImpl: async () => response(fixture),
+  });
+  const result = (
+    await full.api('/api/route', {
+      mode: 'train',
+      number: 'G1802',
+      from: '南京南',
+      to: '西安北',
+    })
+  ).data;
+  assert.equal(result.quality, 'latest');
+  assert.ok(result.distance > 1160 && result.distance < 1180);
 });
 
 test('原日期回退结果在路线查询重用，参考日期与请求日期分离', async (t) => {
@@ -354,6 +511,44 @@ test('G813 共线白名单继续优先使用经核验的 G1 区间', async (t) =
     calls.filter((url) => url.pathname.includes('getTrainMain')).length,
     1,
   );
+});
+
+test('G813 最新主数据空表不缓存，恢复后仍可采用核验过的共线区间', async (t) => {
+  const fixtures = Object.fromEntries(
+    await Promise.all(
+      ['g813', 'g1', 'g813-main'].map(async (name) => [
+        name,
+        JSON.parse(
+          await readFile(
+            new URL(`./fixtures/${name}-railgo.json`, import.meta.url),
+            'utf8',
+          ),
+        ),
+      ]),
+    ),
+  );
+  let mainAttempts = 0;
+  const { api } = await localServer(t, {
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.includes('getTrainMain'))
+        return response(
+          ++mainAttempts === 1
+            ? { success: true, data: { timetable: [] } }
+            : fixtures['g813-main'],
+        );
+      return response(
+        parsed.searchParams.get('train') === 'G1' ? fixtures.g1 : fixtures.g813,
+      );
+    },
+  });
+  const body = { mode: 'train', number: 'G813', from: '天津南', to: '南京南' };
+  assert.equal(
+    (await api('/api/route', body)).data.quality,
+    'station-schematic',
+  );
+  assert.equal((await api('/api/route', body)).data.quality, 'corridor');
+  assert.equal(mainAttempts, 2);
 });
 
 test('HTTP 客户端取消释放共用请求，另一订阅仍能完成', async (t) => {

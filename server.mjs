@@ -210,19 +210,37 @@ export async function createTravelServer({
           throw new TravelError('UPSTREAM_FORMAT', '停站表包含无效站名。', {
             status: 502,
           });
-        const stops = timetableTimes(detail.data.data, date).map(
-          (stop, stopIndex) => ({
-            name: stop.station_name,
-            ...stationMap.get(stop.station_name),
-            arrival: stop.arrival,
-            departure: stop.departure,
-            stopIndex,
-          }),
-        );
+        const warningDetails = [];
+        const stops = timetableTimes(detail.data.data, date, {
+          onInvalidTime: ({ stopIndex, field }) => {
+            warningDetails.push(
+              warning(
+                'INVALID_TIMETABLE_TIME',
+                `12306 返回的第 ${stopIndex + 1} 站“${detail.data.data[stopIndex].station_name}”${field === 'arrival' ? '到达' : '出发'}时刻无效，已留空，请按票面核对。`,
+                'schedule',
+              ),
+            );
+          },
+        }).map((stop, stopIndex) => ({
+          name: stop.station_name,
+          ...stationMap.get(stop.station_name),
+          arrival: stop.arrival,
+          departure: stop.departure,
+          stopIndex,
+        }));
+        if (!stops.some((stop) => stop.arrival || stop.departure))
+          throw new TravelError(
+            'NO_TIMETABLE',
+            '停站表没有可用时刻，请保留行程并手动核对。',
+            { retryable: true, status: 404 },
+          );
+        const warnings = warningDetails.map((item) => item.message);
         return {
           number,
           date,
           stops,
+          warnings,
+          warningDetails,
           source: '12306',
           fetchedAt: timestamp(),
           scheduleProvenance: {
@@ -232,7 +250,10 @@ export async function createTravelServer({
             fetchedAt: timestamp(),
             basis: 'scheduled',
           },
-          note: '按本次所选始发日期查询。中途上车的跨日列车请核对始发日期和本站时刻。',
+          note: [
+            '按本次所选始发日期查询。中途上车的跨日列车请核对始发日期和本站时刻。',
+            ...warnings,
+          ].join(' '),
         };
       },
       context,
@@ -378,12 +399,60 @@ export async function createTravelServer({
           'railgo',
           inner,
         );
-        if (!data?.success)
+        if (data?.success !== true)
           throw new TravelError('NO_RAIL_DATA', '车次线路服务暂不可用。', {
             retryable: true,
             status: 502,
           });
-        return { ...data, fetchedAt: timestamp() };
+        const result = { ...data, fetchedAt: timestamp() };
+        if (endpoint === 'getTrainMain') {
+          if (
+            !Array.isArray(data.data?.timetable) ||
+            data.data.timetable.length < 2 ||
+            data.data.timetable.some(
+              (stop) =>
+                typeof stop?.station !== 'string' || !stop.station.trim(),
+            )
+          )
+            throw new TravelError(
+              'UPSTREAM_FORMAT',
+              '车次线路服务没有返回有效停站表，请稍后重试。',
+              { retryable: true, status: 502 },
+            );
+          return result;
+        }
+        try {
+          const stops = referenceStations(data);
+          if (stops.length < 2) throw new Error('线路服务未返回完整停站。');
+        } catch (error) {
+          throw new TravelError('UPSTREAM_FORMAT', error.message, {
+            retryable: true,
+            status: 502,
+          });
+        }
+        try {
+          const train = data.data.train;
+          if (train != null) {
+            if (typeof train !== 'object' || Array.isArray(train))
+              throw new Error('线路片段格式异常。');
+            // Gaps are recorded by referenceGeometry and checked only after
+            // selecting the travelled interval, not against the whole line.
+            if (Object.keys(train).length) referenceGeometry(data);
+          }
+        } catch (error) {
+          const failure = new TravelError('UPSTREAM_FORMAT', error.message, {
+            retryable: true,
+            status: 502,
+          });
+          // Keep usable stops for this request, but reject the memo loader so
+          // malformed geometry cannot remain in the six-hour success cache.
+          failure.fallbackData = {
+            ...result,
+            data: { stations: data.data.stations, train: {} },
+          };
+          throw failure;
+        }
+        return result;
       },
       { ...context, ttl: 6 * 3600000 },
     );
@@ -391,6 +460,7 @@ export async function createTravelServer({
   function decorateRoute(route, details, schedule) {
     const all = [
       ...details,
+      ...(schedule?.warningDetails || []),
       ...(route.warnings || []).map((message) =>
         warning(
           message.includes('停站表与最新线路不同')
@@ -523,7 +593,7 @@ export async function createTravelServer({
     throwIfCancelled(context.signal);
     for (const result of [railResult, scheduleResult])
       if (isCancellation(result.error)) throw result.error;
-    const data = railResult.value,
+    const data = railResult.value || railResult.error?.fallbackData,
       schedule = scheduleResult.value;
     const details = [];
     if (scheduleResult.error)
@@ -540,7 +610,7 @@ export async function createTravelServer({
       if (data)
         reference = { ...referenceGeometry(data), fetchedAt: data.fetchedAt };
     } catch (error) {
-      routeError = error;
+      routeError = railResult.error || error;
     }
     if (!reference && data) {
       const plan = sharedCorridorPlan(number, fromName, toName);
