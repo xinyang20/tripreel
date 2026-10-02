@@ -9,7 +9,8 @@ export default defineConfig({
   use: {
     baseURL: 'http://127.0.0.1:43717',
     viewport: { width: 1280, height: 720 },
-    channel: software ? undefined : 'chrome',
+    channel:
+      process.env.TRAVEL_TEST_CHANNEL || (software ? undefined : 'chrome'),
     launchOptions: {
       args: software
         ? [
@@ -17,7 +18,7 @@ export default defineConfig({
             '--use-angle=swiftshader',
             '--enable-unsafe-swiftshader',
           ]
-        : ['--enable-webgl', '--use-angle=gl', '--disable-gpu-sandbox'],
+        : ['--enable-webgl'],
     },
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',

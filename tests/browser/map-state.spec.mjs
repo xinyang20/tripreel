@@ -53,13 +53,17 @@ async function ready(page, trips = [flight]) {
   // Capture the real map through an existing user action, without a production test API.
   await page.evaluate(async () => {
     const { Map } = await import('/vendor/maplibre-gl.mjs');
-    const original = Map.prototype.easeTo;
-    Map.prototype.easeTo = function (...args) {
-      if (this.getContainer().id === 'map') window.mapTest = this;
-      return original.apply(this, args);
+    const original = Map.prototype.getContainer;
+    Map.prototype.getContainer = function (...args) {
+      const container = original.apply(this, args);
+      if (container.id === 'map') window.mapTest = this;
+      return container;
     };
-    document.querySelector('#fit-map').click();
-    Map.prototype.easeTo = original;
+    try {
+      document.querySelector('#fit-map').click();
+    } finally {
+      Map.prototype.getContainer = original;
+    }
   });
   await settled(page);
 }

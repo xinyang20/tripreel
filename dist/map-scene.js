@@ -1,3 +1,4 @@
+import { measureStage } from './performance.js';
 import * as ML from './vendor/maplibre-gl.mjs';
 import * as T from './vendor/three.module.js';
 import { flightArc } from './core.js';
@@ -12,7 +13,7 @@ export const baseStyle = {
       type: 'geojson',
       data: '/data/countries.geojson',
       attribution:
-        '线路 <a href="https://railgo.dev/" target="_blank">RailGo</a> · © Natural Earth · 路网 © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap contributors</a>',
+        '线路来源见行程详情 · © Natural Earth · 路网 © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap contributors</a>',
     },
     rail: { type: 'geojson', data: '/data/rail-network.geojson' },
   },
@@ -68,38 +69,251 @@ export function journeyBounds(trips) {
   points.forEach((p) => b.extend(p));
   return b;
 }
-const pointCache = new WeakMap();
+const pointCache = new Map(),
+  combinedPointCache = [];
+let retainedPoints = 0,
+  retainedCombinedPoints = 0;
+const geometryStamp = (trip) =>
+  [
+    trip.mode,
+    trip.routeRevision,
+    trip.routeState,
+    trip.routeConfirmed,
+    trip.quality,
+    trip.distance,
+    trip.from?.coord?.join(','),
+    trip.to?.coord?.join(','),
+  ].join('|');
+function flightGeometry(trip) {
+  const path = flightArc(trip.from.coord, trip.to.coord).map(
+      (c) => new T.Vector3(...mercatorPoint(c)),
+    ),
+    radius =
+      mercatorPoint([...trip.from.coord, 1])[2] *
+      Math.max(450, Math.min(5000, trip.distance * 3));
+  return new T.TubeGeometry(
+    new T.CatmullRomCurve3(path),
+    100,
+    radius,
+    6,
+    false,
+  );
+}
+const pointCacheKey = (trip) =>
+  (trip.routeCoordinates?.length && trip.routeCoordinates) ||
+  (trip.legs?.length && trip.legs) ||
+  trip.from?.coord ||
+  trip;
+function cachedTripPoints(key, stamp) {
+  const cached = pointCache.get(key);
+  if (cached?.stamp === stamp) {
+    pointCache.delete(key);
+    pointCache.set(key, cached);
+    return cached.points;
+  }
+  if (cached) {
+    retainedPoints -= cached.points.length;
+    pointCache.delete(key);
+  }
+}
+function rememberTripPoints(key, stamp, points) {
+  if (points.length <= 600000) {
+    const previous = pointCache.get(key);
+    if (previous) retainedPoints -= previous.points.length;
+    pointCache.delete(key);
+    pointCache.set(key, { stamp, points });
+    retainedPoints += points.length;
+    while (pointCache.size > 512 || retainedPoints > 600000) {
+      const oldest = pointCache.keys().next().value;
+      retainedPoints -= pointCache.get(oldest).points.length;
+      pointCache.delete(oldest);
+    }
+  }
+  return points;
+}
+function tripWorldPoints(trip) {
+  const key = pointCacheKey(trip),
+    stamp = geometryStamp(trip),
+    cached = cachedTripPoints(key, stamp);
+  if (cached) return cached;
+  let points;
+  if (trip.mode === 'flight' && canRenderRoute(trip)) {
+    const tube = flightGeometry(trip),
+      position = tube.getAttribute('position');
+    points = Array.from({ length: position.count }, (_, i) => [
+      position.getX(i),
+      position.getY(i),
+      position.getZ(i),
+    ]);
+    tube.dispose();
+  } else points = tripCoordinates([trip]).map(mercatorPoint);
+  return rememberTripPoints(key, stamp, points);
+}
+function cachedCombinedPoints(parts) {
+  if (parts.length === 1) return parts[0];
+  const index = combinedPointCache.findIndex(
+    (entry) =>
+      entry.parts.length === parts.length &&
+      entry.parts.every((part, i) => part === parts[i]),
+  );
+  if (index >= 0) {
+    const [entry] = combinedPointCache.splice(index, 1);
+    combinedPointCache.push(entry);
+    return entry.points;
+  }
+}
+function rememberCombinedPoints(parts, points) {
+  if (points.length <= 600000) {
+    combinedPointCache.push({ parts, points });
+    retainedCombinedPoints += points.length;
+    while (combinedPointCache.length > 16 || retainedCombinedPoints > 600000)
+      retainedCombinedPoints -= combinedPointCache.shift().points.length;
+  }
+  return points;
+}
 export function journeyWorldPoints(trips) {
-  return trips.flatMap((trip) => {
-    if (pointCache.has(trip)) return pointCache.get(trip);
-    let points;
-    if (trip.mode === 'flight' && canRenderRoute(trip)) {
-      const path = flightArc(trip.from.coord, trip.to.coord).map(
-          (c) => new T.Vector3(...mercatorPoint(c)),
-        ),
-        radius =
-          mercatorPoint([...trip.from.coord, 1])[2] *
-          Math.max(450, Math.min(5000, trip.distance * 3));
-      const tube = new T.TubeGeometry(
-          new T.CatmullRomCurve3(path),
-          100,
-          radius,
-          6,
-          false,
-        ),
-        position = tube.getAttribute('position');
-      points = Array.from({ length: position.count }, (_, i) => [
-        position.getX(i),
-        position.getY(i),
-        position.getZ(i),
-      ]);
-      tube.dispose();
-    } else points = tripCoordinates([trip]).map(mercatorPoint);
-    pointCache.set(trip, points);
-    return points;
+  const parts = trips.map(tripWorldPoints);
+  return (
+    cachedCombinedPoints(parts) || rememberCombinedPoints(parts, parts.flat())
+  );
+}
+// Video preparation retains every original coordinate and uses the same bounded
+// caches as the synchronous map path. Only incomplete work stays local on abort.
+export async function prepareJourneyWorldPoints(
+  trips,
+  {
+    signal,
+    budgetMs = 8,
+    now = () => performance.now(),
+    yieldControl = () => new Promise((resolve) => setTimeout(resolve, 0)),
+  } = {},
+) {
+  signal?.throwIfAborted();
+  let start = now(),
+    visited = 0;
+  const checkpoint = async () => {
+    signal?.throwIfAborted();
+    if (now() - start >= budgetMs) {
+      await yieldControl();
+      signal?.throwIfAborted();
+      start = now();
+    }
+  };
+  const parts = [];
+  for (const trip of trips) {
+    const key = pointCacheKey(trip),
+      stamp = geometryStamp(trip),
+      cached = cachedTripPoints(key, stamp);
+    if (cached) parts.push(cached);
+    else if (trip.mode === 'flight' && canRenderRoute(trip))
+      parts.push(tripWorldPoints(trip));
+    else {
+      const points = [];
+      for (const line of [
+        [trip.from?.coord, trip.to?.coord],
+        ...tripRouteLines(trip),
+      ])
+        for (const point of line) {
+          if (isPoint(point)) points.push(mercatorPoint(point));
+          if (++visited % 1024 === 0) await checkpoint();
+        }
+      signal?.throwIfAborted();
+      parts.push(rememberTripPoints(key, stamp, points));
+    }
+    await checkpoint();
+  }
+  const combined = cachedCombinedPoints(parts);
+  if (combined) return combined;
+  const points = [];
+  for (const part of parts)
+    for (const point of part) {
+      points.push(point);
+      if (++visited % 1024 === 0) await checkpoint();
+    }
+  signal?.throwIfAborted();
+  return rememberCombinedPoints(parts, points);
+}
+const flightLayers = new WeakMap();
+function updateFlightLayer(map, trips, onProjection) {
+  let state = flightLayers.get(map);
+  if (!state || !map.getLayer('flight-arcs-3d')) {
+    const scene = new T.Scene(),
+      camera = new T.Camera(),
+      projection = new T.Matrix4();
+    state = { scene, meshes: new Map(), onProjection };
+    flightLayers.set(map, state);
+    let renderer;
+    map.addLayer({
+      id: 'flight-arcs-3d',
+      type: 'custom',
+      renderingMode: '3d',
+      onAdd(m, gl) {
+        renderer = new T.WebGLRenderer({
+          canvas: m.getCanvas(),
+          context: gl,
+          antialias: true,
+        });
+        renderer.autoClear = false;
+      },
+      render(gl, options) {
+        projection.fromArray(options.defaultProjectionData.mainMatrix);
+        camera.projectionMatrix.copy(projection);
+        renderer.resetState();
+        renderer.render(scene, camera);
+        state.onProjection(projection);
+      },
+      onRemove() {
+        for (const { mesh } of state.meshes.values()) {
+          mesh.geometry.dispose();
+          mesh.material.dispose();
+        }
+        state.meshes.clear();
+        scene.clear();
+        renderer?.dispose();
+        if (flightLayers.get(map) === state) flightLayers.delete(map);
+      },
+    });
+  }
+  state.onProjection = onProjection;
+  const keep = new Set();
+  trips.forEach((trip, i) => {
+    if (trip.mode !== 'flight' || !canRenderRoute(trip)) return;
+    const key = trip.id || i,
+      stamp = geometryStamp(trip),
+      previous = state.meshes.get(key);
+    keep.add(key);
+    if (previous?.stamp === stamp) return;
+    if (previous) {
+      state.scene.remove(previous.mesh);
+      previous.mesh.geometry.dispose();
+      previous.mesh.material.dispose();
+    }
+    const mesh = new T.Mesh(
+      flightGeometry(trip),
+      new T.MeshBasicMaterial({
+        color: '#8290cf',
+        transparent: true,
+        opacity: 0.9,
+        depthTest: false,
+      }),
+    );
+    state.scene.add(mesh);
+    state.meshes.set(key, { stamp, mesh });
   });
+  for (const [key, { mesh }] of state.meshes)
+    if (!keep.has(key)) {
+      state.scene.remove(mesh);
+      mesh.geometry.dispose();
+      mesh.material.dispose();
+      state.meshes.delete(key);
+    }
 }
 export function installJourneyLayers(map, trips, onProjection = () => {}) {
+  return measureStage('layers', () =>
+    updateJourneyLayers(map, trips, onProjection),
+  );
+}
+function updateJourneyLayers(map, trips, onProjection) {
   const lines = [],
     dots = [];
   for (const t of trips) {
@@ -157,70 +371,9 @@ export function installJourneyLayers(map, trips, onProjection = () => {}) {
     map.getSource('journeys').setData(geo);
     map.getSource('journey-stops').setData(points);
   }
-  if (map.getLayer('flight-arcs-3d')) map.removeLayer('flight-arcs-3d');
-  const scene = new T.Scene(),
-    camera = new T.Camera();
-  let renderer;
-  for (const t of trips.filter(
-    (t) => t.mode === 'flight' && canRenderRoute(t),
-  )) {
-    const points = flightArc(t.from.coord, t.to.coord).map((c) => {
-      const m = ML.MercatorCoordinate.fromLngLat(c, c[2]);
-      return new T.Vector3(m.x, m.y, m.z);
-    });
-    const radius =
-      ML.MercatorCoordinate.fromLngLat(
-        t.from.coord,
-      ).meterInMercatorCoordinateUnits() *
-      Math.max(450, Math.min(5000, t.distance * 3));
-    scene.add(
-      new T.Mesh(
-        new T.TubeGeometry(
-          new T.CatmullRomCurve3(points),
-          100,
-          radius,
-          6,
-          false,
-        ),
-        new T.MeshBasicMaterial({
-          color: '#8290cf',
-          transparent: true,
-          opacity: 0.9,
-          depthTest: false,
-        }),
-      ),
-    );
-  }
-  map.addLayer({
-    id: 'flight-arcs-3d',
-    type: 'custom',
-    renderingMode: '3d',
-    onAdd(m, gl) {
-      renderer = new T.WebGLRenderer({
-        canvas: m.getCanvas(),
-        context: gl,
-        antialias: true,
-      });
-      renderer.autoClear = false;
-    },
-    render(gl, options) {
-      const projection = new T.Matrix4().fromArray(
-        options.defaultProjectionData.mainMatrix,
-      );
-      camera.projectionMatrix.copy(projection);
-      renderer.resetState();
-      renderer.render(scene, camera);
-      onProjection(projection);
-    },
-    onRemove() {
-      for (const mesh of scene.children) {
-        mesh.geometry.dispose();
-        mesh.material.dispose();
-      }
-      renderer?.dispose();
-    },
-  });
+  updateFlightLayer(map, trips, onProjection);
 }
+
 export function avatarPixel(map, avatar, projection) {
   if (!avatar?.coord || !projection) return null;
   const c = ML.MercatorCoordinate.fromLngLat(

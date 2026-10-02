@@ -63,54 +63,83 @@ function clip(poly, a, b, c) {
   }
   return result;
 }
-function feasibleCenter(
-  points,
-  zoom,
-  { width, height, rect, pitch, bearing, fov },
-) {
+// All points impose the same five half-plane normals. Their tightest right-hand
+// sides describe the exact intersection, so zoom search need not revisit them.
+function fitConstraints(points, { width, height, rect, pitch, fov }) {
   const d = height / (2 * Math.tan((fov * RAD) / 2)),
-    t = d / (512 * 2 ** zoom),
-    p = pitch * RAD,
-    s = Math.sin(p),
-    c = Math.cos(p);
-  const kl = (rect.left - width / 2) / d,
+    s = Math.sin(pitch * RAD),
+    c = Math.cos(pitch * RAD),
+    kl = (rect.left - width / 2) / d,
     kr = (rect.right - width / 2) / d,
     kt = (rect.top - height / 2) / d,
     kb = (rect.bottom - height / 2) / d;
-  // Camera center within a generous range around these points (not a geographical crop).
-  const mean = points.reduce(
-    (a, v) => [a[0] + v[0] / points.length, a[1] + v[1] / points.length],
+  let left = Infinity,
+    right = Infinity,
+    top = Infinity,
+    bottom = Infinity,
+    front = Infinity,
+    mx = 0,
+    my = 0;
+  for (const [u, v, z] of points) {
+    if (!Number.isFinite(u + v + z)) return null;
+    mx += u / points.length;
+    my += v / points.length;
+    left = Math.min(left, u + kl * s * v + kl * c * z);
+    right = Math.min(right, -u - kr * s * v - kr * c * z);
+    top = Math.min(top, (c + kt * s) * v + (-s + kt * c) * z);
+    bottom = Math.min(bottom, -(c + kb * s) * v + (s - kb * c) * z);
+    front = Math.min(front, -s * v - c * z);
+  }
+  return {
+    d,
+    mean: [mx, my],
+    planes: [
+      [1, kl * s, left, -kl],
+      [-1, -kr * s, right, kr],
+      [0, c + kt * s, top, -kt],
+      [0, -(c + kb * s), bottom, kb],
+      [0, -s, front, 0.99],
+    ],
+  };
+}
+function polygonCenter(poly) {
+  // Area centroid is unchanged by redundant/collinear clipping vertices. Work
+  // relative to the first point to retain precision at street-level zoom.
+  const origin = poly[0];
+  let area = 0,
+    x = 0,
+    y = 0;
+  for (let i = 1; i < poly.length - 1; i++) {
+    const ax = poly[i][0] - origin[0],
+      ay = poly[i][1] - origin[1],
+      bx = poly[i + 1][0] - origin[0],
+      by = poly[i + 1][1] - origin[1],
+      cross = ax * by - ay * bx;
+    area += cross;
+    x += (ax + bx) * cross;
+    y += (ay + by) * cross;
+  }
+  if (Math.abs(area) > 1e-24)
+    return [origin[0] + x / (3 * area), origin[1] + y / (3 * area)];
+  return poly.reduce(
+    (a, p) => [a[0] + p[0] / poly.length, a[1] + p[1] / poly.length],
     [0, 0],
   );
+}
+function feasibleCenter(prepared, zoom, bearing) {
+  const { d, mean, planes } = prepared,
+    t = d / (512 * 2 ** zoom);
   let poly = [
     [mean[0] - 2, mean[1] - 2],
     [mean[0] + 2, mean[1] - 2],
     [mean[0] + 2, mean[1] + 2],
     [mean[0] - 2, mean[1] + 2],
   ];
-  for (const [u, v, z] of points) {
-    poly = clip(poly, 1, kl * s, u - kl * t + kl * s * v + kl * c * z);
-    poly = clip(poly, -1, -kr * s, -u + kr * t - kr * s * v - kr * c * z);
-    poly = clip(
-      poly,
-      0,
-      c + kt * s,
-      -kt * t + (c + kt * s) * v + (-s + kt * c) * z,
-    );
-    poly = clip(
-      poly,
-      0,
-      -(c + kb * s),
-      kb * t - (c + kb * s) * v + (s - kb * c) * z,
-    );
-    poly = clip(poly, 0, -s, 0.99 * t - s * v - c * z); // keep points in front of camera
+  for (const [a, b, base, scale] of planes) {
+    poly = clip(poly, a, b, base + scale * t);
     if (!poly.length) return null;
   }
-  const center = poly.reduce(
-    (a, p) => [a[0] + p[0] / poly.length, a[1] + p[1] / poly.length],
-    [0, 0],
-  );
-  return lngLat(unrotate(center, bearing * RAD));
+  return lngLat(unrotate(polygonCenter(poly), bearing * RAD));
 }
 export function fitMercatorPoints(points, options) {
   const {
@@ -132,13 +161,15 @@ export function fitMercatorPoints(points, options) {
     return null;
   const opts = { width, height, rect, pitch, bearing, fov },
     rotated = points.map((p) => rotate(p, bearing * RAD));
+  const prepared = fitConstraints(rotated, opts);
+  if (!prepared) return null;
   let lo = minZoom,
     hi = maxZoom,
-    center = feasibleCenter(rotated, lo, opts);
+    center = feasibleCenter(prepared, lo, bearing);
   if (!center) return null; // tell the caller to expand the safe rectangle or use its existing fallback
   for (let i = 0; i < 26; i++) {
     const mid = (lo + hi) / 2,
-      c = feasibleCenter(rotated, mid, opts);
+      c = feasibleCenter(prepared, mid, bearing);
     if (c) {
       lo = mid;
       center = c;
@@ -146,7 +177,7 @@ export function fitMercatorPoints(points, options) {
   }
   // Leave ~2% safety beyond the input's icon/stroke envelope.
   const zoom = Math.max(minZoom, lo - 0.025);
-  center = feasibleCenter(rotated, zoom, opts) || center;
+  center = feasibleCenter(prepared, zoom, bearing) || center;
   const camera = { center, zoom, pitch, bearing };
   const bounds = {
     left: Infinity,
@@ -154,19 +185,28 @@ export function fitMercatorPoints(points, options) {
     right: -Infinity,
     bottom: -Infinity,
   };
+  const [cu, cv] = rotate(mercatorPoint(camera.center), bearing * RAD),
+    scale = 512 * 2 ** zoom,
+    d = prepared.d,
+    sine = Math.sin(pitch * RAD),
+    cosine = Math.cos(pitch * RAD);
   let inside = true;
-  for (const point of points) {
-    const p = projectMercator(point, camera, { width, height, fov });
-    bounds.left = Math.min(bounds.left, p.x);
-    bounds.top = Math.min(bounds.top, p.y);
-    bounds.right = Math.max(bounds.right, p.x);
-    bounds.bottom = Math.max(bounds.bottom, p.y);
+  // Check every original vertex, reusing camera constants and the already
+  // rotated coordinates instead of allocating a projection object per point.
+  for (const [u, v, z] of rotated) {
+    const w = d - scale * (sine * (v - cv) + cosine * z),
+      x = width / 2 + (d * scale * (u - cu)) / w,
+      y = height / 2 + (d * scale * (cosine * (v - cv) - sine * z)) / w;
+    bounds.left = Math.min(bounds.left, x);
+    bounds.top = Math.min(bounds.top, y);
+    bounds.right = Math.max(bounds.right, x);
+    bounds.bottom = Math.max(bounds.bottom, y);
     inside &&=
-      p.w > 0 &&
-      p.x >= rect.left - 0.01 &&
-      p.x <= rect.right + 0.01 &&
-      p.y >= rect.top - 0.01 &&
-      p.y <= rect.bottom + 0.01;
+      w > 0 &&
+      x >= rect.left - 0.01 &&
+      x <= rect.right + 0.01 &&
+      y >= rect.top - 0.01 &&
+      y <= rect.bottom + 0.01;
   }
   return { camera, rect, bounds, inside };
 }
@@ -241,4 +281,60 @@ export function fitInViewport(points, options) {
     return Math.log2(Math.max(1, size)) - 0.12 * offset;
   };
   return fits.sort((a, b) => score(b) - score(a))[0] || null;
+}
+
+// Callers own this cache and clear it when their map is disposed. Geometry
+// arrays are immutable snapshots; different arrays or viewports never alias.
+export function createCameraFitCache({
+  maxPointSets = 16,
+  maxViews = 8,
+  maxPoints = 600000,
+} = {}) {
+  const entries = new Map();
+  let retainedPoints = 0;
+  return {
+    fit(points, options) {
+      const key = JSON.stringify([
+        options.width,
+        options.height,
+        options.pitch ?? 48,
+        options.bearing ?? -13,
+        options.fov ?? 36.86989764584402,
+        options.minZoom ?? 2,
+        options.maxZoom ?? 13.5,
+        options.edge ?? 20,
+        options.gap ?? 14,
+        options.blockers || [],
+      ]);
+      let views = entries.get(points);
+      if (views?.has(key)) {
+        const fit = views.get(key);
+        views.delete(key);
+        views.set(key, fit);
+        entries.delete(points);
+        entries.set(points, views);
+        return fit;
+      }
+      const fit = fitInViewport(points, options);
+      if (points.length > maxPoints || maxPointSets < 1 || maxViews < 1)
+        return fit;
+      if (!views) {
+        views = new Map();
+        entries.set(points, views);
+        retainedPoints += points.length;
+      }
+      views.set(key, fit);
+      while (views.size > maxViews) views.delete(views.keys().next().value);
+      while (entries.size > maxPointSets || retainedPoints > maxPoints) {
+        const oldest = entries.keys().next().value;
+        retainedPoints -= oldest.length;
+        entries.delete(oldest);
+      }
+      return fit;
+    },
+    clear() {
+      entries.clear();
+      retainedPoints = 0;
+    },
+  };
 }

@@ -1,3 +1,4 @@
+import { measureStage } from './performance.js';
 import * as ML from './vendor/maplibre-gl.mjs';
 import { $, state, toast } from './store.js';
 import { localDateTime } from './core.js';
@@ -8,12 +9,22 @@ import {
   journeyWorldPoints,
   avatarPixel,
 } from './map-scene.js';
-import { fitInViewport } from './camera-fit.js';
+import { createCameraFitCache } from './camera-fit.js';
 import { buildTimeline, replayFrame } from './replay.js';
-import { endpointPlaces, layoutPlaceLabels } from './map-labels.js';
+import {
+  endpointPlaces,
+  layoutPlaceLabels,
+  renderPlaceLabels,
+} from './map-labels.js';
 import { openVideoExport } from './video-export.js';
 import { selectedScope } from './selectors.js';
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const cameraFits = createCameraFitCache();
+let labelFrame,
+  labelKey = '',
+  overviewPlaces = [],
+  lastLabelView,
+  selectedCardId;
 let map,
   ready = false,
   timeline = buildTimeline([]),
@@ -56,7 +67,7 @@ fetch('/data/place-city-groups.json')
   .then((r) => r.json())
   .then((data) => {
     cityIndex = data;
-    updateLabels();
+    updateLabels(true);
   })
   .catch(() => {});
 function viewportBlockers(container) {
@@ -78,9 +89,11 @@ function viewportBlockers(container) {
 }
 export function fitMap(trip, duration = 750) {
   if (!map) return;
+  clearTimeout(resizeTimer);
+  resizeTimer = undefined;
   const trips = trip ? [trip] : state.trips,
-    bounds = journeyBounds(trips);
-  if (!bounds) {
+    points = journeyWorldPoints(trips);
+  if (!points.length) {
     map.easeTo({
       center: [115, 32.5],
       zoom: 4.7,
@@ -92,22 +105,34 @@ export function fitMap(trip, duration = 750) {
   }
   const container = map.getContainer().getBoundingClientRect(),
     blockers = viewportBlockers(container);
-  const fit = fitInViewport(journeyWorldPoints(trips), {
-    width: container.width,
-    height: container.height,
-    blockers,
-    edge: container.width < 760 ? 16 : 22,
-    gap: 14,
-    pitch: map.getPitch(),
-    bearing: map.getBearing(),
-    fov: map.getVerticalFieldOfView(),
-    maxZoom: 13,
-  });
+  const fit = measureStage('cameraFit', () =>
+    cameraFits.fit(points, {
+      width: container.width,
+      height: container.height,
+      blockers,
+      edge: container.width < 760 ? 16 : 22,
+      gap: 14,
+      pitch: map.getPitch(),
+      bearing: map.getBearing(),
+      fov: map.getVerticalFieldOfView(),
+      maxZoom: 13,
+    }),
+  );
+  const center = map.getCenter();
+  if (
+    fit &&
+    !map.isMoving() &&
+    Math.abs(center.lng - fit.camera.center[0]) < 1e-10 &&
+    Math.abs(center.lat - fit.camera.center[1]) < 1e-10 &&
+    Math.abs(map.getZoom() - fit.camera.zoom) < 1e-10 &&
+    Object.values(map.getPadding()).every((value) => value === 0)
+  )
+    return;
   map.stop();
   if (fit)
     map.easeTo({ ...fit.camera, padding: 0, duration: reduced ? 0 : duration });
   else
-    map.fitBounds(bounds, {
+    map.fitBounds(journeyBounds(trips), {
       padding: { top: 100, bottom: 150, left: 35, right: 35 },
       maxZoom: 12,
       duration: reduced ? 0 : duration,
@@ -116,65 +141,95 @@ export function fitMap(trip, duration = 750) {
       retainPadding: false,
     });
 }
-function updateLabels() {
+function updateLabels(force = false) {
+  if (!ready || !map) return;
+  const key = overview
+    ? 'overview'
+    : (current?.item.type || '') +
+      ':' +
+      (current?.trip.id || selectedTrip?.id || '');
+  if (!force && labelKey === key) return;
+  labelKey = key;
+  if (labelFrame != null) return;
+  labelFrame = requestAnimationFrame(() => {
+    labelFrame = undefined;
+    paintLabels();
+  });
+}
+function paintLabels() {
   if (!ready || !map) return;
   const all = overview,
     places = all
-      ? endpointPlaces(state.trips)
+      ? overviewPlaces
       : current?.places || endpointPlaces(selectedTrip ? [selectedTrip] : []),
     width = map.getContainer().clientWidth,
-    height = map.getContainer().clientHeight;
-  const labels = layoutPlaceLabels(places, {
-    project: (c) => map.project(c),
-    zoom: map.getZoom(),
-    width,
-    height,
-    cityIndex,
-    detail: !all,
-    blockers: viewportBlockers(map.getContainer().getBoundingClientRect()),
+    height = map.getContainer().clientHeight,
+    blockers = viewportBlockers(map.getContainer().getBoundingClientRect()),
+    center = map.getCenter(),
+    key = JSON.stringify([
+      center.lng,
+      center.lat,
+      map.getZoom(),
+      map.getPitch(),
+      map.getBearing(),
+      width,
+      height,
+      blockers,
+      all,
+      all
+        ? null
+        : places.map((place) => [
+            place.name,
+            place.coord,
+            place.kind,
+            place.code,
+            place.city,
+          ]),
+    ]);
+  if (
+    lastLabelView?.key === key &&
+    lastLabelView.cityIndex === cityIndex &&
+    (!all || lastLabelView.places === places)
+  )
+    return;
+  lastLabelView = { key, cityIndex, places };
+  return measureStage('labelLayout', () => {
+    const labels = layoutPlaceLabels(places, {
+      project: (c) => map.project(c),
+      zoom: map.getZoom(),
+      width,
+      height,
+      cityIndex,
+      detail: !all,
+      blockers,
+    });
+    renderPlaceLabels($('map-place-labels'), labels);
   });
-  const overlay = $('map-place-labels'),
-    svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'),
-    nodes = [svg];
-  for (const label of labels) {
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    for (const [key, value] of Object.entries({
-      x1: label.anchorX,
-      y1: label.anchorY,
-      x2: Math.max(label.x, Math.min(label.x + label.width, label.anchorX)),
-      y2: Math.max(label.y, Math.min(label.y + label.height, label.anchorY)),
-      stroke: '#a8c9dc',
-      'stroke-width': 1,
-    }))
-      line.setAttribute(key, String(value));
-    svg.append(line);
-    const el = document.createElement('div');
-    el.className = 'map-place-label' + (label.merged ? ' merged' : '');
-    el.textContent = label.name;
-    el.title = label.members.join('、');
-    el.style.left = label.x + 'px';
-    el.style.top = label.y + 'px';
-    el.style.width = label.width + 'px';
-    nodes.push(el);
-  }
-  overlay.replaceChildren(...nodes);
 }
+
 function positionAvatar() {
   const p = map && avatarPixel(map, current?.avatar, projection);
   $('traveller').classList.toggle('hidden', !p);
   if (p)
     $('traveller').style.transform = `translate(${p.x - 24}px,${p.y - 47}px)`;
 }
-export function drawMap() {
+export function drawMap({ geometry = true } = {}) {
+  if (geometry) overviewPlaces = endpointPlaces(state.trips);
+  selectedCardId = state.selected;
   timeline = buildTimeline(state.trips);
+  if (!timeline.duration) pause();
   overview = state.progress <= 0 || state.progress >= 1;
   if (!ready || !map) return;
-  installJourneyLayers(map, state.trips, (matrix) => {
-    projection = matrix;
-    positionAvatar();
-  });
-  if ($('follow').checked) fitMap(undefined, 0);
+  if (geometry) {
+    installJourneyLayers(map, state.trips, (matrix) => {
+      projection = matrix;
+      positionAvatar();
+    });
+  }
   updateReplay();
+  if (geometry && $('follow').checked)
+    fitMap(overview ? undefined : selectedTrip || undefined, 0);
+  updateLabels(true);
 }
 function fitCurrentView() {
   if (!ready || !map || !$('follow').checked) return;
@@ -191,11 +246,11 @@ map?.on('load', () => {
   drawMap();
 });
 map?.on('move', () => {
-  updateLabels();
+  updateLabels(true);
   positionAvatar();
 });
 map?.on('resize', () => {
-  updateLabels();
+  updateLabels(true);
   positionAvatar();
   scheduleFit();
 });
@@ -206,6 +261,20 @@ if (map)
     map.resize();
     scheduleFit();
   }).observe(map.getContainer());
+function selectCard(id) {
+  if (id === selectedCardId) return;
+  if (selectedCardId)
+    document
+      .querySelector('[data-trip="' + CSS.escape(selectedCardId) + '"]')
+      ?.classList.remove('selected');
+  document
+    .querySelector('[data-trip="' + CSS.escape(id) + '"]')
+    ?.classList.add('selected');
+  selectedCardId = id;
+}
+const setText = (element, value) => {
+  if (element.textContent !== value) element.textContent = value;
+};
 export function updateReplay() {
   current = replayFrame(timeline, state.progress);
   selectedTrip = current?.trip || null;
@@ -219,20 +288,18 @@ export function updateReplay() {
     return;
   }
   const { trip, avatar, item } = current;
-  $('playback-title').textContent = current.title;
-  document.querySelector('.traveller-icon').textContent = current.icon;
-  $('traveller-label').textContent = avatar.label;
-  $('current-time').textContent = localDateTime(avatar.stamp).slice(11);
-  $('current-date').textContent =
+  setText($('playback-title'), current.title);
+  setText(document.querySelector('.traveller-icon'), current.icon);
+  setText($('traveller-label'), avatar.label);
+  setText($('current-time'), localDateTime(avatar.stamp).slice(11));
+  setText(
+    $('current-date'),
     localDateTime(avatar.stamp).slice(0, 10) +
-    (item.type === 'gap' ? ' · 停留已压缩' : ' · 旅程回放');
+      (item.type === 'gap' ? ' · 停留已压缩' : ' · 旅程回放'),
+  );
   $('progress').value = String(Math.round(state.progress * 1000));
   state.selected = trip.id;
-  document
-    .querySelectorAll('[data-trip]')
-    .forEach((el) =>
-      el.classList.toggle('selected', el.dataset.trip === trip.id),
-    );
+  selectCard(trip.id);
   if (
     state.playing &&
     $('follow').checked &&
@@ -304,9 +371,7 @@ export function selectTrip(id) {
     $('current-time').textContent = '— — : — —';
     $('current-date').textContent = '时刻或线路未完整，暂不回放';
     if (trip.from?.coord || trip.to?.coord) fitMap(trip);
-    document
-      .querySelectorAll('[data-trip]')
-      .forEach((el) => el.classList.toggle('selected', el.dataset.trip === id));
+    selectCard(id);
     updateLabels();
     return;
   }

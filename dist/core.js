@@ -81,6 +81,33 @@ export function along(c, t) {
   }
   return c.at(-1);
 }
+// Immutable route snapshots can reuse this distance index between frames.
+export function lineIndex(coordinates) {
+  const cumulative = new Float64Array(coordinates?.length || 0);
+  for (let i = 1; i < cumulative.length; i++)
+    cumulative[i] =
+      cumulative[i - 1] + distance(coordinates[i - 1], coordinates[i]);
+  return { coordinates, cumulative, length: cumulative.at(-1) || 0 };
+}
+export function alongIndex(index, fraction) {
+  const { coordinates, cumulative, length } = index;
+  if (!coordinates?.length) return null;
+  if (coordinates.length === 1 || !length) return coordinates[0];
+  const target = length * Math.max(0, Math.min(1, fraction));
+  if (!Number.isFinite(target)) return coordinates.at(-1);
+  let lo = 1,
+    hi = coordinates.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (cumulative[mid] >= target) hi = mid;
+    else lo = mid + 1;
+  }
+  const segment = cumulative[lo] - cumulative[lo - 1],
+    f = segment ? (target - cumulative[lo - 1]) / segment : 0,
+    a = coordinates[lo - 1],
+    b = coordinates[lo];
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+}
 export function flightArc(a, b, count = 100) {
   const r = Math.PI / 180,
     ar = a.map((x) => x * r),
