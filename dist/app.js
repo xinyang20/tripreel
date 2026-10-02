@@ -4,6 +4,8 @@ import { tripDate, filterTrips, scopeSummary } from './selectors.js';
 import { pause, drawMap, selectTrip } from './map.js';
 import { openEditor, setMode, importText } from './editor.js';
 import { refreshStoredRoutes } from './routes.js';
+import { fillRailProviderSelect } from './rail-providers.js';
+import { measureStage } from './performance.js';
 import {
   setupLibraryUI,
   renderLibraryUI,
@@ -22,7 +24,19 @@ state.selection = new Set();
 state.capabilities = { deployment: 'unknown', railgoEnabled: false };
 let deleteTarget,
   previousView = '',
-  loaded = false;
+  previousGeometry = '',
+  previousScope = '',
+  loaded = false,
+  pendingRender = 0;
+const cardNodes = new Map();
+function renderProviderSettings() {
+  fillRailProviderSelect(
+    $('default-rail-provider'),
+    state.capabilities,
+    state.preferences?.railProvider,
+    $('default-provider-hint'),
+  );
+}
 async function loadCapabilities() {
   try {
     const capabilities = await api('/api/capabilities', undefined, {
@@ -35,6 +49,8 @@ async function loadCapabilities() {
     )
       throw new Error('部署能力信息无效。');
     state.capabilities = capabilities;
+    renderProviderSettings();
+    document.dispatchEvent(new Event('rail-capabilities-change'));
     if (!capabilities.railgoEnabled) {
       const notice =
         capabilities.notice ||
@@ -44,9 +60,9 @@ async function loadCapabilities() {
         $(id).classList.remove('hidden');
       }
       $('train-route-hint').textContent =
-        '停站与手动途经点仅用于生成示意连线，须预览确认，不代表真实轨道。';
+        '可选 OSM 已核实区间参考；未覆盖时保留停站或手动途经点示意。新候选须预览确认，不代表乘车当日实际轨迹。';
       $('train-source-copy').textContent =
-        '火车：此部署停用 RailGo 在线轨道查询。12306 公开网页服务提供停站和计划时刻；根据可靠停站或手动途经点生成的连线仅为示意，须预览确认，不代表实际轨道或当日调度。原有线路和导入备份仍可查看，缺少信息时可保存为待补全。';
+        '火车：此部署停用 RailGo 在线轨道查询，使用本站 OSM 已核实区间参考。未覆盖区间可根据 12306 停站或手动途经点生成示意，均须核对提示和候选，不代表乘车当日实际轨迹。原有线路和导入备份仍可查看。';
       $('railgo-source-link').textContent = 'RailGo（示例及本机版线路来源）';
     }
   } catch {
@@ -60,6 +76,55 @@ async function loadCapabilities() {
       '本站线路查询能力暂未确认；可保留输入，已有线路不会自动更新。';
     $('train-source-copy').textContent =
       '火车：暂时无法确认本站线路查询能力，已暂停自动更新。可手动记录车次、日期、地点与时刻，已有线路和备份不受影响。';
+  }
+}
+function renderCards(trips, source) {
+  const list = $('trip-list'),
+    live = new Set(source.map((trip) => trip.id));
+  for (const [id] of cardNodes) if (!live.has(id)) cardNodes.delete(id);
+  if (!trips.length) {
+    const markup = `<div class="empty-state"><strong>${source.length ? '这个范围还没有行程' : '第一段旅程，从这里开始'}</strong><p>写出车次、日期与地点，时刻可以稍后补全。</p><div class="empty-actions"><button class="primary" data-empty-add>添加一段</button><button class="secondary" data-empty-paste>粘贴多段</button></div><p class="format-example">火车 G1 2027/1/8 北京南-上海虹桥</p></div>`;
+    if (list.innerHTML !== markup) list.innerHTML = markup;
+    return;
+  }
+  let cursor = list.firstElementChild;
+  for (const trip of trips) {
+    let entry = cardNodes.get(trip.id);
+    if (!entry || entry.trip !== trip || entry.demo !== state.demo) {
+      const markup = card(trip);
+      if (!entry) {
+        const template = document.createElement('template');
+        template.innerHTML = markup;
+        entry = { node: template.content.firstElementChild };
+        cardNodes.set(trip.id, entry);
+      } else if (entry.markup !== markup) {
+        const template = document.createElement('template');
+        template.innerHTML = markup;
+        const next = template.content.firstElementChild;
+        const focused = entry.node.contains(document.activeElement)
+          ? [...entry.node.querySelectorAll('button,input')].indexOf(
+              document.activeElement,
+            )
+          : -1;
+        entry.node.className = next.className;
+        entry.node.replaceChildren(...next.childNodes);
+        if (focused >= 0)
+          entry.node
+            .querySelectorAll('button,input')
+            [focused]?.focus({ preventScroll: true });
+      }
+      Object.assign(entry, { trip, demo: state.demo, markup });
+    }
+    entry.node.classList.toggle('selected', trip.id === state.selected);
+    const checkbox = entry.node.querySelector('[data-select]');
+    if (checkbox) checkbox.checked = state.selection.has(trip.id);
+    if (entry.node !== cursor) list.insertBefore(entry.node, cursor);
+    cursor = entry.node.nextElementSibling;
+  }
+  while (cursor) {
+    const next = cursor.nextElementSibling;
+    cursor.remove();
+    cursor = next;
   }
 }
 function card(trip) {
@@ -80,7 +145,7 @@ function card(trip) {
     <div class="card-meta"><span class="quality-badge ${warning ? 'warn' : ''}">${!playable ? '待补全 · ' : ''}${esc(routeLabel(trip))}</span><span class="card-actions"><button class="text-button" data-detail="${esc(trip.id)}">详情</button>${state.demo ? '' : `<button class="text-button" data-edit="${esc(trip.id)}" aria-label="编辑 ${esc(trip.number)}">编辑</button><button class="text-button" data-delete="${esc(trip.id)}" aria-label="删除 ${esc(trip.number)}">删除</button>`}</span></div>
   </article>`;
 }
-function render() {
+function synchronizeView() {
   if (!loaded) return;
   const source = state.demo ? state.demoTrips || [] : state.saved;
   const groups = new Map((state.groups || []).map((g) => [g.id, g.name]));
@@ -91,15 +156,20 @@ function render() {
   )
     filters.group = '';
   state.activeGroupId = groups.has(filters.group) ? filters.group : null;
-  state.trips = filterTrips(
-    source.map((t) => ({ ...t, groupName: groups.get(t.groupId) || '' })),
-    filters,
+  state.trips = measureStage('filter', () =>
+    filterTrips(source, filters, groups),
   );
   const trips = state.trips,
     ids = new Set(trips.map((t) => t.id));
   state.selection = new Set([...state.selection].filter((id) => ids.has(id)));
   state.selected = ids.has(state.selected) ? state.selected : trips[0]?.id;
-  const summary = scopeSummary(trips),
+  return { source, trips };
+}
+function renderView() {
+  if (!loaded) return;
+  const source = state.demo ? state.demoTrips || [] : state.saved,
+    trips = state.trips;
+  const summary = measureStage('summary', () => scopeSummary(trips)),
     playable = trips.filter(canReplay);
   $('stat-count').textContent = summary.count;
   $('stat-distance').textContent =
@@ -113,9 +183,7 @@ function render() {
     ? '示例旅程 · 未保存'
     : `当前范围 ${summary.count} 段 · ${summary.count - summary.playable} 段待补全`;
   $('new-journey').classList.toggle('hidden', !state.demo);
-  $('trip-list').innerHTML = trips.length
-    ? trips.map(card).join('')
-    : `<div class="empty-state"><strong>${source.length ? '这个范围还没有行程' : '第一段旅程，从这里开始'}</strong><p>写出车次、日期与地点，时刻可以稍后补全。</p><div class="empty-actions"><button class="primary" data-empty-add>添加一段</button><button class="secondary" data-empty-paste>粘贴多段</button></div><p class="format-example">火车 G1 2027/1/8 北京南-上海虹桥</p></div>`;
+  measureStage('cards', () => renderCards(trips, source));
   const group = (state.groups || []).find((g) => g.id === filters.group);
   $('map-title').textContent =
     group?.name ||
@@ -133,28 +201,72 @@ function render() {
     !state.saved.some((trip) => trip.mode === 'train' && !trip.routeFrozen);
   $('progress-start').textContent = playable[0]?.from.name || '起点';
   $('progress-end').textContent = playable.at(-1)?.to.name || '终点';
-  renderLibraryUI(filters);
+  measureStage('library', () => renderLibraryUI(filters));
   const signature = JSON.stringify(
     trips.map((t) => [
       t.id,
-      t.revision,
       t.routeRevision,
+      t.number,
+      t.mode,
       t.departure,
       t.arrival,
+      t.travelDate,
       t.routeState,
+      t.routeConfirmed,
+      t.referenceAccepted,
       t.quality,
     ]),
   );
+  const geometry = JSON.stringify([
+    state.demo,
+    trips.map((t) => [
+      t.id,
+      t.mode,
+      t.routeRevision,
+      t.routeState,
+      t.routeConfirmed,
+      t.quality,
+    ]),
+  ]);
+  const scope = JSON.stringify([state.demo, trips.map((t) => t.id)]);
   if (signature !== previousView) {
     previousView = signature;
-    pause();
-    state.progress = 0;
-    drawMap();
+    const changedGeometry = geometry !== previousGeometry;
+    if (scope !== previousScope) {
+      pause();
+      state.progress = 0;
+    }
+    previousScope = scope;
+    previousGeometry = geometry;
+    measureStage('mapSubmit', () => drawMap({ geometry: changedGeometry }));
   }
 }
-document.addEventListener('journey-change', render);
-document.addEventListener('library-refresh', render);
-setupLibraryUI({ filters, render });
+function render() {
+  synchronizeView();
+  return measureStage('render', renderView);
+}
+function scheduleRender() {
+  // Keep API/export scope correct even when rAF is suspended in a hidden tab.
+  synchronizeView();
+  if (!pendingRender)
+    pendingRender = requestAnimationFrame(() => {
+      pendingRender = 0;
+      measureStage('render', renderView);
+    });
+}
+document.addEventListener('journey-change', scheduleRender);
+document.addEventListener('library-refresh', scheduleRender);
+document.addEventListener('preferences-change', renderProviderSettings);
+$('default-rail-provider').onchange = async (event) => {
+  try {
+    await store.savePreferences({ railProvider: event.target.value });
+    $('provider-status').textContent = '默认来源已保存，已有线路保持原来源。';
+  } catch (error) {
+    $('provider-status').textContent = error.message;
+    renderProviderSettings();
+  }
+};
+setupLibraryUI({ filters, render: scheduleRender });
 $('trip-list').onclick = (event) => {
   if (event.target.closest('[data-empty-add]')) return openEditor();
   if (event.target.closest('[data-empty-paste]')) return openEditor(true);
@@ -232,6 +344,8 @@ async function init() {
   for (const id of ['add-trip', 'import-text']) $(id).disabled = true;
   const capabilities = loadCapabilities();
   await store.load();
+  await store.loadPreferences();
+  renderProviderSettings();
   loaded = true;
   render();
   try {

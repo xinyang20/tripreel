@@ -1,14 +1,14 @@
-import { parseTime } from './core.js';
-import { canRenderRoute, canReplay, actualTravelDate } from './domain.js';
+import { tripMetadata, tripSummary, actualTravelDate } from './domain.js';
 
 export const tripDate = actualTravelDate;
-export function filterTrips(trips, filters = {}) {
+export function filterTrips(trips, filters = {}, groups = new Map()) {
   const search = String(filters.search || '')
     .trim()
     .toLocaleLowerCase();
   return trips
-    .filter((trip) => {
-      const date = tripDate(trip);
+    .map((trip) => ({ trip, metadata: tripMetadata(trip) }))
+    .filter(({ trip, metadata }) => {
+      const date = metadata.date;
       return (
         (!filters.group ||
           (filters.group === 'ungrouped'
@@ -19,26 +19,29 @@ export function filterTrips(trips, filters = {}) {
         (!filters.to || date <= filters.to) &&
         (!filters.mode || trip.mode === filters.mode) &&
         (!search ||
-          [trip.number, trip.from?.name, trip.to?.name, trip.groupName].some(
-            (value) =>
-              String(value || '')
-                .toLocaleLowerCase()
-                .includes(search),
-          ))
+          metadata.search.some((value) => value.includes(search)) ||
+          String(groups.get(trip.groupId) || trip.groupName || '')
+            .toLocaleLowerCase()
+            .includes(search))
       );
     })
-    .sort((a, b) => {
-      const stamp = (t) =>
-        Number.isFinite(parseTime(t.departure))
-          ? parseTime(t.departure)
-          : parseTime(tripDate(t) + 'T00:00');
-      return stamp(a) - stamp(b) || String(a.id).localeCompare(String(b.id));
-    });
+    .sort(
+      (a, b) =>
+        a.metadata.sortTime - b.metadata.sortTime ||
+        String(a.trip.id).localeCompare(String(b.trip.id)),
+    )
+    .map(({ trip }) => trip);
 }
 export function scopeSummary(trips) {
   const distance = { rail: 0, schematic: 0, flight: 0, unknown: 0 };
+  let playable = 0;
+  const places = new Set();
   for (const trip of trips) {
-    if (!canRenderRoute(trip) || !Number.isFinite(trip.distance)) {
+    const summary = tripSummary(trip);
+    playable += Number(summary.playable);
+    for (const name of [trip.from?.name, trip.to?.name])
+      if (name) places.add(name);
+    if (!summary.renderable || !Number.isFinite(trip.distance)) {
       distance.unknown++;
       continue;
     }
@@ -52,10 +55,8 @@ export function scopeSummary(trips) {
   }
   return {
     count: trips.length,
-    playable: trips.filter(canReplay).length,
-    places: new Set(
-      trips.flatMap((trip) => [trip.from?.name, trip.to?.name]).filter(Boolean),
-    ).size,
+    playable,
+    places: places.size,
     distance,
     totalDistance: distance.rail + distance.schematic + distance.flight,
   };

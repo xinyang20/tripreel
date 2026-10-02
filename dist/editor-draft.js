@@ -1,7 +1,10 @@
 import { coordinate, flightArc, localDateTime, parseTime } from './core.js';
 import { canRenderRoute, extractRoute, hasDateMismatch } from './domain.js';
+import { originalRailProvider } from './rail-providers.js';
 
 export const routeIdentityFields = [
+  'provider',
+  'providerDataVersion',
   'mode',
   'number',
   'date',
@@ -123,6 +126,9 @@ export function updateDraftField(input, key, value) {
 }
 export function chooseCandidate(row, candidate) {
   const next = initializeDraft(candidate.draft);
+  if (next.mode === 'train') next.provider = row.draft.provider;
+  if (next.mode === 'train')
+    next.providerDataVersion = row.draft.providerDataVersion;
   for (const endpoint of ['from', 'to'])
     if (next[endpoint] !== row.draft[endpoint]) {
       delete next[`${endpoint}Coord`];
@@ -167,6 +173,8 @@ export const missingFields = (draft) =>
   );
 export const needsRouteConfirmation = (route) =>
   Boolean(
+    (route?.routeProvider === 'osm-local' &&
+      route?.resolution?.state !== 'unavailable') ||
     route?.requiresConfirmation ||
     route?.resolution?.requiresConfirmation ||
     route?.resolution?.state === 'needs-confirmation' ||
@@ -254,6 +262,11 @@ export function draftFromTrip(trip) {
   return initializeDraft(
     {
       ...trip,
+      provider: originalRailProvider(trip),
+      providerDataVersion:
+        originalRailProvider(trip) === 'osm-local'
+          ? (trip.routeDataVersion ?? undefined)
+          : undefined,
       date: trip.travelDate || trip.departure?.slice(0, 10) || trip.queryDate,
       from: trip.from?.name || '',
       to: trip.to?.name || '',
@@ -272,6 +285,7 @@ export function draftFromTrip(trip) {
 }
 
 export const editorFields = [
+  ['provider', '线路来源'],
   ['mode', '交通方式'],
   ['number', '车次 / 航班号'],
   ['date', '实际出行日期'],
@@ -379,9 +393,14 @@ export function tripFromDraft(
       discardAutomaticTimes(draft);
     }
   }
+  const originalDraft = original ? draftFromTrip(original) : null;
   const reuseOriginal = Boolean(
       original &&
-      routeIdentity(draft) === routeIdentity(draftFromTrip(original)),
+      routeIdentityFields
+        .filter((key) => !['provider', 'providerDataVersion'].includes(key))
+        .every(
+          (key) => fieldValue(draft, key) === fieldValue(originalDraft, key),
+        ),
     ),
     retainedRoute = reuseOriginal && canRenderRoute(original) ? original : null;
   const routeReady =
@@ -466,6 +485,16 @@ export function tripFromDraft(
     routeCoordinates: effective.routeCoordinates || [],
     distance: effective.distance ?? null,
     quality: effective.quality || 'pending',
+    routeProvider:
+      draft.mode === 'train'
+        ? selectedRoute === retainedRoute && retainedRoute
+          ? originalRailProvider(retainedRoute)
+          : originalRailProvider(selectedRoute) ||
+            route?.routeProvider ||
+            draft.provider
+        : undefined,
+    routeDataVersion: effective.routeDataVersion || null,
+    routeEvidence: effective.routeEvidence || null,
     routeTiming: effective.routeTiming || 'continuous',
     resolution: effective.resolution ||
       route?.resolution || {
@@ -488,7 +517,7 @@ export function tripFromDraft(
                 ? 'ROUTE_CONFIRMATION_REQUIRED'
                 : 'ROUTE_UNAVAILABLE',
               message: needsRouteConfirmation(route)
-                ? '停站连线示意尚未确认，可稍后接受或补全真实路线。'
+                ? '候选线路尚未确认，可稍后接受或补全路线。'
                 : '路线待补全。',
             },
           ]),

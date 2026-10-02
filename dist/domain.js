@@ -1,4 +1,5 @@
 import { coordinate, parseTime } from './core.js';
+import { measureStage } from './performance.js';
 
 export const ROUTE_FIELDS = [
   'from',
@@ -14,6 +15,9 @@ export const ROUTE_FIELDS = [
   'routeSourceUrl',
   'routeNote',
   'routeFetchedAt',
+  'routeProvider',
+  'routeDataVersion',
+  'routeEvidence',
   'via',
   'routeInputs',
   'requiresConfirmation',
@@ -54,20 +58,76 @@ const point = (p) => {
     return false;
   }
 };
-const line = (points) =>
-  Array.isArray(points) &&
-  points.length >= 2 &&
-  points.length <= 150000 &&
-  points.every(point);
+const immutableValues = new WeakSet();
+const lineResults = new WeakMap();
+const derivedResults = new WeakMap();
+const metadataResults = new WeakMap();
+const replayResults = new WeakMap();
+const issueResults = new WeakMap();
+export const isReadOnlyTrip = (trip) => immutableValues.has(trip);
+// Only values frozen recursively by this boundary may reuse validation results.
+// Editable drafts and caller-owned objects always retain fresh validation.
+export function prepareReadOnlyTrip(trip) {
+  const freeze = (value) => {
+    if (!value || typeof value !== 'object' || immutableValues.has(value))
+      return value;
+    for (const child of Object.values(value)) freeze(child);
+    Object.freeze(value);
+    immutableValues.add(value);
+    return value;
+  };
+  return freeze(trip);
+}
+function line(points) {
+  if (!Array.isArray(points)) return false;
+  if (immutableValues.has(points) && lineResults.has(points))
+    return lineResults.get(points);
+  const valid =
+    points.length >= 2 && points.length <= 150000 && points.every(point);
+  if (immutableValues.has(points)) lineResults.set(points, valid);
+  return valid;
+}
+export function tripMetadata(trip) {
+  if (immutableValues.has(trip) && metadataResults.has(trip))
+    return metadataResults.get(trip);
+  const departure = parseTime(trip.departure);
+  const value = Object.freeze({
+    date: actualTravelDate(trip),
+    sortTime: Number.isFinite(departure)
+      ? departure
+      : parseTime(actualTravelDate(trip) + 'T00:00'),
+    search: [trip.number, trip.from?.name, trip.to?.name].map((item) =>
+      String(item || '').toLocaleLowerCase(),
+    ),
+  });
+  Object.freeze(value.search);
+  if (immutableValues.has(trip)) metadataResults.set(trip, value);
+  return value;
+}
+export function tripSummary(trip) {
+  if (immutableValues.has(trip) && derivedResults.has(trip))
+    return derivedResults.get(trip);
+  const value = Object.freeze({
+    ...tripMetadata(trip),
+    renderable: canRenderRoute(trip),
+    playable: canReplay(trip),
+  });
+  if (immutableValues.has(trip)) derivedResults.set(trip, value);
+  return value;
+}
 export const validDate = (value) =>
   typeof value === 'string' &&
   /^\d{4}-\d{2}-\d{2}$/.test(value) &&
   Number.isFinite(parseTime(value + 'T00:00'));
+const isOsmReference = (trip) =>
+  trip.quality === 'corridor' &&
+  /^OpenStreetMap(?:\s|·|$)/.test(trip.routeSource || '');
 export function routeLabel(trip) {
   if (trip.routeCandidate && !canRenderRoute(trip)) return '路线待确认';
   if (trip.routeState === 'ready' && trip.routeConfirmed === false)
     return '路线待确认';
   if (!canRenderRoute(trip)) return '路线待补全';
+  if (isOsmReference(trip)) return 'OSM 线路参考';
   return (
     {
       latest: '最新车次线路',
@@ -83,8 +143,11 @@ export function canRenderRoute(trip) {
   if (!point(trip?.from?.coord) || !point(trip?.to?.coord)) return false;
   if (trip.routeState === 'pending') return false;
   if (
-    ['station-schematic', 'manual-schematic'].includes(trip.quality) &&
-    trip.routeConfirmed === false
+    (['station-schematic', 'manual-schematic'].includes(trip.quality) ||
+      trip.requiresConfirmation ||
+      trip.resolution?.requiresConfirmation ||
+      trip.routeProvider === 'osm-local') &&
+    trip.routeConfirmed !== true
   )
     return false;
   if (trip.mode === 'flight') return true;
@@ -96,15 +159,18 @@ export function canRenderRoute(trip) {
   );
 }
 export function canReplay(trip) {
-  return (
+  if (immutableValues.has(trip) && replayResults.has(trip))
+    return replayResults.get(trip);
+  const result =
     canRenderRoute(trip) &&
     trip.routeConfirmed !== false &&
     trip.referenceAccepted !== false &&
     !hasDateMismatch(trip) &&
     Number.isFinite(parseTime(trip.departure)) &&
     Number.isFinite(parseTime(trip.arrival)) &&
-    parseTime(trip.arrival) > parseTime(trip.departure)
-  );
+    parseTime(trip.arrival) > parseTime(trip.departure);
+  if (immutableValues.has(trip)) replayResults.set(trip, result);
+  return result;
 }
 export function routeQualityRank(trip) {
   if (!canRenderRoute({ ...trip, routeState: undefined, routeConfirmed: true }))
@@ -122,6 +188,8 @@ export function routeQualityRank(trip) {
   );
 }
 export function tripIssues(trip) {
+  if (immutableValues.has(trip) && issueResults.has(trip))
+    return issueResults.get(trip);
   const issues = (Array.isArray(trip.issues) ? trip.issues : [])
     .filter(
       (i) =>
@@ -177,7 +245,13 @@ export function tripIssues(trip) {
   if (trip.quality === 'manual-schematic')
     add('schematic-route', '手动途经点连线示意，不代表真实铁轨。', 'route');
   if (trip.quality === 'corridor')
-    add('corridor-route', '使用已核对的同线区间作为参考。', 'route');
+    add(
+      'corridor-route',
+      isOsmReference(trip)
+        ? 'OSM 线路参考，不代表乘车当日真实轨迹。'
+        : '使用已核对的同线区间作为参考。',
+      'route',
+    );
   if (trip.routeFrozen)
     add('frozen-route', '当前线路已冻结，不自动更新。', 'route', 'info');
   for (const warning of trip.warningDetails || [])
@@ -194,9 +268,17 @@ export function tripIssues(trip) {
     if (typeof warning === 'string' && warning)
       add(`source-warning-${index}`, warning, 'source');
   if (trip.routeNote) add('route-note', trip.routeNote, 'route');
-  return [...new Map(issues.map((i) => [i.code, i])).values()];
+  const result = [...new Map(issues.map((i) => [i.code, i])).values()];
+  if (immutableValues.has(trip)) {
+    prepareReadOnlyTrip(result);
+    issueResults.set(trip, result);
+  }
+  return result;
 }
 export function normalizeTrip(input) {
+  return measureStage('normalize', () => normalizeTripValue(input));
+}
+function normalizeTripValue(input) {
   const trip = structuredClone(input);
   trip.id ||= crypto.randomUUID();
   trip.number = String(trip.number || '')
@@ -239,7 +321,11 @@ export function normalizeTrip(input) {
   trip.routeConfirmed =
     trip.routeState === 'ready' &&
     (trip.routeConfirmed ??
-      !(trip.requiresConfirmation || trip.resolution?.requiresConfirmation));
+      !(
+        trip.requiresConfirmation ||
+        trip.resolution?.requiresConfirmation ||
+        trip.routeProvider === 'osm-local'
+      ));
   trip.distance ??= null;
   trip.issues = tripIssues(trip);
   return trip;

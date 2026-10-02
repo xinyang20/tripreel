@@ -5,6 +5,12 @@ import { resumeDraft } from './editor.js';
 import { validateDraft } from './draft-validation.js';
 const { $, state, esc, status, toast } = store;
 let restorePreview, detailsId;
+const previousMarkup = new WeakMap();
+function updateMarkup(element, markup) {
+  if (previousMarkup.get(element) === markup) return;
+  element.innerHTML = markup;
+  previousMarkup.set(element, markup);
+}
 const refresh = () => document.dispatchEvent(new Event('library-refresh'));
 const sourceNames = {
   text: '文本明确填写',
@@ -53,16 +59,18 @@ export function renderLibraryUI(filters) {
     !groups.some((g) => g.id === filters.group)
   )
     filters.group = '';
-  $('filter-group').innerHTML = options(groups, filters.group);
+  updateMarkup($('filter-group'), options(groups, filters.group));
   $('filter-group').value = filters.group;
   const years = [
     ...new Set(state.saved.map((t) => tripDate(t).slice(0, 4)).filter(Boolean)),
   ]
     .sort()
     .reverse();
-  $('filter-year').innerHTML =
+  updateMarkup(
+    $('filter-year'),
     '<option value="">全部年份</option>' +
-    years.map((y) => `<option value="${esc(y)}">${esc(y)}</option>`).join('');
+      years.map((y) => `<option value="${esc(y)}">${esc(y)}</option>`).join(''),
+  );
   for (const key of ['year', 'from', 'to', 'mode', 'search'])
     if (document.activeElement !== $('filter-' + key))
       $('filter-' + key).value = filters[key];
@@ -72,21 +80,24 @@ export function renderLibraryUI(filters) {
   $('filter-summary').textContent = active ? `· ${active} 项` : '';
   $('draft-banner').classList.toggle('hidden', !drafts.length);
   $('open-drafts').textContent = `继续 ${drafts.length} 份未完成草稿`;
-  $('draft-list').innerHTML = drafts.length
-    ? drafts
-        .map(
-          (d) =>
-            `<div class="draft-item"><span>${esc(draftCaption(d))}<small>${esc(dateCaption(d.updatedAt))}</small></span><button class="text-button" data-resume="${esc(d.id)}">继续</button><button class="text-button" data-discard="${esc(d.id)}">丢弃</button></div>`,
-        )
-        .join('')
-    : '<p class="field-hint">没有待继续的草稿。</p>';
+  updateMarkup(
+    $('draft-list'),
+    drafts.length
+      ? drafts
+          .map(
+            (d) =>
+              `<div class="draft-item"><span>${esc(draftCaption(d))}<small>${esc(dateCaption(d.updatedAt))}</small></span><button class="text-button" data-resume="${esc(d.id)}">继续</button><button class="text-button" data-discard="${esc(d.id)}">丢弃</button></div>`,
+          )
+          .join('')
+      : '<p class="field-hint">没有待继续的草稿。</p>',
+  );
   $('bulk-toolbar').classList.toggle(
     'hidden',
     !state.selection?.size || state.demo,
   );
   $('selected-count').textContent = `已选 ${state.selection?.size || 0} 段`;
   const bulkValue = $('bulk-group').value;
-  $('bulk-group').innerHTML = options(groups, bulkValue, false);
+  updateMarkup($('bulk-group'), options(groups, bulkValue, false));
   const recovery = state.recovery;
   const items = recovery?.items || recovery?.quarantined || [];
   const recoveryMessage =
@@ -98,14 +109,19 @@ export function renderLibraryUI(filters) {
         : '');
   $('recovery-banner').textContent = recoveryMessage;
   $('recovery-banner').classList.toggle('hidden', !recoveryMessage);
-  $('group-list').innerHTML =
+  const groupCounts = new Map();
+  for (const trip of state.saved)
+    groupCounts.set(trip.groupId, (groupCounts.get(trip.groupId) || 0) + 1);
+  updateMarkup(
+    $('group-list'),
     groups
       .map(
         (g) =>
-          `<form class="group-item" data-group="${esc(g.id)}"><input aria-label="旅程名称" maxlength="60" required value="${esc(g.name)}"/><span>${state.saved.filter((t) => t.groupId === g.id).length} 段</span><button class="text-button" type="submit">重命名</button><button class="text-button" type="button" data-remove-group="${esc(g.id)}">解散分组</button></form>`,
+          `<form class="group-item" data-group="${esc(g.id)}"><input aria-label="旅程名称" maxlength="60" required value="${esc(g.name)}"/><span>${groupCounts.get(g.id) || 0} 段</span><button class="text-button" type="submit">重命名</button><button class="text-button" type="button" data-remove-group="${esc(g.id)}">解散分组</button></form>`,
       )
       .join('') ||
-    '<p class="field-hint">创建命名旅程后，可勾选行程批量归组。</p>';
+      '<p class="field-hint">创建命名旅程后，可勾选行程批量归组。</p>',
+  );
   for (const id of ['group-name'])
     $(id).disabled = state.locked || !state.ready;
   $('export-backup').disabled = !state.ready;
@@ -212,10 +228,11 @@ export function setupLibraryUI({ filters, render }) {
     $('apply-group').disabled = true;
     try {
       const groupId = $('bulk-group').value || null;
-      await store.saveTrips(
+      await store.assignGroup(
         state.saved
           .filter((t) => state.selection.has(t.id))
-          .map((t) => ({ ...t, groupId })),
+          .map((t) => ({ id: t.id, revision: t.revision })),
+        groupId,
       );
       state.selection.clear();
       refresh();

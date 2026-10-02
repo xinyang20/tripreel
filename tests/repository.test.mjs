@@ -54,6 +54,415 @@ async function setup(raw = null) {
   return { repository, options, setLegacy: (value) => (legacy = value) };
 }
 const snapshot = (repo) => repo.snapshot();
+const idbResult = (operation) =>
+  new Promise((resolve, reject) => {
+    operation.onsuccess = () => resolve(operation.result);
+    operation.onerror = () => reject(operation.error);
+  });
+async function rawStores(options, work, mode = 'readonly') {
+  const db = await idbResult(options.indexedDB.open(options.dbName));
+  try {
+    const tx = db.transaction(['meta', 'trips', 'routes'], mode);
+    const completed = new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onabort = () => reject(tx.error);
+    });
+    const result = await work(
+      Object.fromEntries(
+        ['meta', 'trips', 'routes'].map((name) => [name, tx.objectStore(name)]),
+      ),
+    );
+    await completed;
+    return result;
+  } finally {
+    db.close();
+  }
+}
+async function assertIdentityIndex(options) {
+  const { meta, index, trips } = await rawStores(options, async (stores) => ({
+    meta: await idbResult(stores.meta.get('dataset')),
+    index: await idbResult(stores.meta.get('trip-identities')),
+    trips: await idbResult(stores.trips.getAll()),
+  }));
+  assert.equal(index.schemaVersion, 1);
+  assert.equal(index.datasetRevision, meta.revision);
+  assert.equal(index.entries.length, trips.length);
+  assert.equal(
+    new Set(index.entries.map((entry) => entry.id)).size,
+    trips.length,
+  );
+  for (const entry of index.entries) {
+    assert.ok(
+      Object.values(entry).every(
+        (value) =>
+          value === null || ['string', 'number'].includes(typeof value),
+      ),
+    );
+    const actual = trips.find((trip) => trip.id === entry.id);
+    for (const field of ['mode', 'number', 'revision'])
+      assert.equal(entry[field], actual[field]);
+    assert.equal(
+      entry.travelDate,
+      actual.travelDate || actual.departure?.slice(0, 10) || actual.date || '',
+    );
+    assert.equal(entry.departure, actual.departure || null);
+    assert.equal(entry.arrival, actual.arrival || null);
+    assert.equal(entry.groupId, actual.groupId ?? null);
+    assert.equal(entry.from, actual.from.name);
+    assert.equal(entry.to, actual.to.name);
+  }
+  return index;
+}
+test('正常保存仅读轻量索引及本次记录，不读其他候选或任何全库几何', async (t) => {
+  const { repository, options } = await setup();
+  const hidden = trip('indexed-hidden', '2026-09-27');
+  hidden.routeCandidate = { ...hidden, requiresConfirmation: true };
+  const [current] = await repository.saveTrips([
+    trip('indexed-current'),
+    hidden,
+  ]);
+  await assertIdentityIndex(options);
+  const get = IDBObjectStore.prototype.get;
+  const getAll = IDBObjectStore.prototype.getAll;
+  const allowed = new Set([
+    'indexed-current',
+    'indexed-new',
+    'indexed-duplicate',
+    'indexed-overlap',
+  ]);
+  t.mock.method(IDBObjectStore.prototype, 'get', function (key) {
+    if (['trips', 'routes'].includes(this.name))
+      assert.ok(allowed.has(key), `不应读取 ${this.name}/${key}`);
+    return get.call(this, key);
+  });
+  t.mock.method(IDBObjectStore.prototype, 'getAll', function (...args) {
+    assert.ok(
+      !['trips', 'routes'].includes(this.name),
+      `不应全读 ${this.name}`,
+    );
+    return getAll.apply(this, args);
+  });
+  await repository.saveTrips([{ ...current, source: '纯元信息修改' }]);
+  await repository.saveTrips([trip('indexed-new', '2026-09-28')]);
+  await assert.rejects(
+    repository.saveTrips([{ ...trip('indexed-duplicate', '2026-09-27') }]),
+    /重复/,
+  );
+  await assert.rejects(
+    repository.saveTrips([
+      { ...trip('indexed-overlap', '2026-09-27'), number: 'G2' },
+    ]),
+    /重叠/,
+  );
+  const index = await rawStores(options, (stores) =>
+    idbResult(stores.meta.get('trip-identities')),
+  );
+  assert.equal(index.entries.length, 3);
+  assert.ok(
+    index.entries.every(
+      (entry) =>
+        !Object.keys(entry).some((field) =>
+          /route|coord|history|candidate/i.test(field),
+        ),
+    ),
+  );
+  repository.close();
+});
+test('旧 v2 页写入、缺失或损坏索引按版本与结构重建，随后恢复定向保存', async (t) => {
+  const { repository, options } = await setup();
+  let [current] = await repository.saveTrips([
+    trip('index-old-a'),
+    trip('index-old-b', '2026-09-27'),
+  ]);
+  const getAll = IDBObjectStore.prototype.getAll;
+  let baseReads = 0;
+  t.mock.method(IDBObjectStore.prototype, 'getAll', function (...args) {
+    if (this.name === 'trips') baseReads++;
+    assert.notEqual(this.name, 'routes', '重建轻量索引不需要路线表');
+    return getAll.apply(this, args);
+  });
+  const save = async () => {
+    [current] = await repository.saveTrips([
+      { ...current, source: `索引重建 ${current.revision}` },
+    ]);
+  };
+  await rawStores(
+    options,
+    (stores) => idbResult(stores.meta.delete('trip-identities')),
+    'readwrite',
+  );
+  await save();
+  assert.equal(baseReads, 1);
+  await save();
+  assert.equal(baseReads, 1);
+  // Emulate the old v2 writer: same record count, changed identity/time and dataset
+  // revision, with no knowledge of the new optional meta record.
+  await rawStores(
+    options,
+    async (stores) => {
+      const base = await idbResult(stores.trips.get('index-old-b'));
+      await idbResult(
+        stores.trips.put({
+          ...base,
+          number: 'G77',
+          travelDate: undefined,
+          date: '2026-09-28',
+          departure: '2026-09-28T08:00',
+          arrival: '2026-09-28T10:00',
+          revision: base.revision + 1,
+        }),
+      );
+      const meta = await idbResult(stores.meta.get('dataset'));
+      await idbResult(
+        stores.meta.put({ ...meta, revision: meta.revision + 1 }),
+      );
+    },
+    'readwrite',
+  );
+  await save();
+  assert.equal(baseReads, 2);
+  await assert.rejects(
+    repository.saveTrips([
+      { ...trip('old-page-duplicate', '2026-09-28'), number: 'G77' },
+    ]),
+    /重复/,
+  );
+  await assert.rejects(
+    repository.saveTrips([
+      { ...trip('old-page-overlap', '2026-09-28'), number: 'G78' },
+    ]),
+    /重叠/,
+  );
+  for (const corrupt of [
+    (index) => {
+      index.schemaVersion = 999;
+    },
+    (index) => {
+      index.entries[0].routeCandidate = { coordinates: [[1, 2]] };
+    },
+    (index) => {
+      index.entries[1].id = index.entries[0].id;
+    },
+    (index) => {
+      index.entries.pop();
+    },
+    // A well-typed but incorrect affected entry is checked against its real base.
+    (index) => {
+      index.entries.find((entry) => entry.id === current.id).number = 'G999';
+    },
+  ]) {
+    await rawStores(
+      options,
+      async (stores) => {
+        const index = await idbResult(stores.meta.get('trip-identities'));
+        corrupt(index);
+        await idbResult(stores.meta.put(index));
+      },
+      'readwrite',
+    );
+    const before = baseReads;
+    await save();
+    assert.equal(baseReads, before + 1);
+    await save();
+    assert.equal(baseReads, before + 1);
+  }
+  repository.close();
+});
+test('双 repository 并发、草稿分组、删除及恢复始终与轻量索引同事务推进', async () => {
+  const { repository, options } = await setup();
+  const other = createRepository(options);
+  await other.init();
+  try {
+    const results = await Promise.allSettled([
+      repository.saveTrips([trip('index-concurrent-a')]),
+      other.saveTrips([trip('index-concurrent-b')]),
+    ]);
+    assert.equal(
+      results.filter((item) => item.status === 'fulfilled').length,
+      1,
+    );
+    await assertIdentityIndex(options);
+    const existing = (await repository.snapshot()).trips[0];
+    const group = await other.saveGroup({ name: '索引分组' });
+    await repository.assignGroup(
+      [{ id: existing.id, revision: existing.revision }],
+      group.id,
+    );
+    await assertIdentityIndex(options);
+    await other.deleteGroup(group.id, group.revision);
+    await assertIdentityIndex(options);
+    await other.saveDraft({ id: 'index-draft', kind: 'single', revision: 0 });
+    await assertIdentityIndex(options);
+    await repository.deleteDraft('index-draft', 1);
+    await assertIdentityIndex(options);
+    const preview = await repository.previewRestore({
+      version: 1,
+      trips: [trip('index-restored', '2026-09-27')],
+    });
+    await repository.applyRestore(preview);
+    await assertIdentityIndex(options);
+    const restored = (await other.readTrips(['index-restored']))[0];
+    await other.deleteTrip(restored.id, restored.revision);
+    await assertIdentityIndex(options);
+    await repository.saveTrips([trip('index-readded', '2026-09-27')]);
+    const readded = (await repository.readTrips(['index-readded']))[0];
+    await other.setRouteFrozen(
+      readded.id,
+      true,
+      readded.revision,
+      readded.routeRevision,
+    );
+    const beforePreferences = await assertIdentityIndex(options);
+    await repository.savePreferences({ railProvider: 'osm-local' });
+    assert.deepEqual(await assertIdentityIndex(options), beforePreferences);
+  } finally {
+    repository.close();
+    other.close();
+  }
+});
+test('索引写入容量失败时主记录、数据版本和索引一起回滚', async (t) => {
+  const { repository, options } = await setup();
+  const [current] = await repository.saveTrips([trip('index-atomic')]);
+  const before = await repository.snapshot();
+  const beforeIndex = await assertIdentityIndex(options);
+  const put = IDBObjectStore.prototype.put;
+  const mocked = t.mock.method(
+    IDBObjectStore.prototype,
+    'put',
+    function (value) {
+      if (this.name === 'meta' && value.id === 'trip-identities')
+        throw new DOMException('full', 'QuotaExceededError');
+      return put.call(this, value);
+    },
+  );
+  await assert.rejects(
+    repository.saveTrips([{ ...current, number: 'G88' }]),
+    /空间不足/,
+  );
+  mocked.mock.restore();
+  assert.deepEqual(await repository.snapshot(), before);
+  assert.deepEqual(await assertIdentityIndex(options), beforeIndex);
+  repository.close();
+});
+test('提交通知只含变更标识，连续版本定向读取，版本缺口和旧通知回退完整快照', async () => {
+  const { repository } = await setup();
+  const changes = [];
+  repository.subscribeCommits((change) => changes.push(change));
+  const [a] = await repository.saveTrips([trip('delta-a')]);
+  assert.equal(changes[0].fromRevision, 0);
+  assert.equal(changes[0].revision, 1);
+  assert.deepEqual(changes[0].changedTripIds, ['delta-a']);
+  assert.equal('trips' in changes[0], false);
+  const first = await repository.readChanges(changes[0], 0);
+  assert.equal(first.partial, true);
+  assert.deepEqual(
+    first.trips.map((item) => item.id),
+    ['delta-a'],
+  );
+  await repository.saveTrips([trip('delta-b', '2026-09-27')]);
+  const partial = await repository.readChanges(changes[1], 1);
+  assert.equal(partial.partial, true);
+  assert.deepEqual(
+    partial.trips.map((item) => item.id),
+    ['delta-b'],
+  );
+  for (const change of [changes[0], changes[1], { revision: 2 }]) {
+    const full = await repository.readChanges(change, 0);
+    assert.equal(full.partial, undefined);
+    assert.equal(full.trips.length, 2);
+  }
+  await repository.deleteTrip(a.id, a.revision);
+  const removed = await repository.readChanges(changes.at(-1), 2);
+  assert.deepEqual(removed.removedTripIds, ['delta-a']);
+  assert.equal(removed.trips.length, 0);
+});
+test('单条保存和分组修改不读取全库路线，草稿提交也推进连续版本', async (t) => {
+  const { repository } = await setup();
+  const [a, b] = await repository.saveTrips([
+    trip('light-a'),
+    trip('light-b', '2026-09-27'),
+  ]);
+  const originalGetAll = IDBObjectStore.prototype.getAll;
+  const originalPut = IDBObjectStore.prototype.put;
+  let routeReads = 0,
+    routeWrites = 0;
+  t.mock.method(IDBObjectStore.prototype, 'getAll', function (...args) {
+    if (this.name === 'routes') routeReads++;
+    return originalGetAll.apply(this, args);
+  });
+  t.mock.method(IDBObjectStore.prototype, 'put', function (...args) {
+    if (this.name === 'routes') routeWrites++;
+    return originalPut.apply(this, args);
+  });
+  const [next] = await repository.saveTrips([{ ...a, source: '补充说明' }]);
+  assert.equal(routeReads, 0);
+  const group = await repository.saveGroup({ name: '新分组' });
+  routeWrites = 0;
+  await repository.assignGroup(
+    [{ id: next.id, revision: next.revision }],
+    group.id,
+  );
+  assert.equal(routeWrites, 0);
+  assert.equal(routeReads, 0);
+  await assert.rejects(
+    repository.assignGroup(
+      [
+        { id: b.id, revision: b.revision },
+        { id: next.id, revision: next.revision },
+      ],
+      group.id,
+    ),
+    /改变/,
+  );
+  assert.equal((await repository.readTrips([b.id]))[0].groupId, null);
+  const changes = [];
+  repository.subscribeCommits((change) => changes.push(change));
+  const before = await repository.snapshot();
+  await repository.saveDraft({
+    id: 'delta-draft',
+    revision: 0,
+    kind: 'single',
+  });
+  const after = await repository.readChanges(
+    changes[0],
+    before.datasetRevision,
+  );
+  assert.equal(after.partial, true);
+  assert.equal(after.kind, 'drafts');
+  assert.equal(after.drafts.length, 1);
+  assert.equal(after.trips.length, 0);
+});
+test('来源偏好保存到独立meta且不会使行程恢复预览失效', async () => {
+  const { repository, options } = await setup();
+  const other = createRepository(options);
+  await other.init();
+  assert.deepEqual(await repository.loadPreferences(), {
+    railProvider: 'railgo',
+  });
+  const before = await repository.snapshot();
+  const preview = await repository.previewRestore({
+    version: 1,
+    trips: [trip('preferences-trip')],
+  });
+  const changes = [];
+  repository.subscribeCommits((change) => changes.push(change));
+  assert.deepEqual(
+    await repository.savePreferences({ railProvider: 'osm-local' }),
+    { railProvider: 'osm-local' },
+  );
+  assert.equal((await other.loadPreferences()).railProvider, 'osm-local');
+  assert.equal(
+    (await repository.snapshot()).datasetRevision,
+    before.datasetRevision,
+  );
+  assert.deepEqual(changes, [{ kind: 'preferences' }]);
+  await repository.applyRestore(preview);
+  await assert.rejects(
+    repository.savePreferences({ railProvider: 'untrusted-url' }),
+    /设置无效/,
+  );
+  assert.equal((await repository.loadPreferences()).railProvider, 'osm-local');
+});
 test('自动线路仅接受同等或更高质量，空、坏、低质与网络失败均留存原线及最近错误', async () => {
   const { repository } = await setup();
   const [current] = await repository.saveTrips([trip()]);
@@ -153,6 +562,205 @@ test('相同几何刷新不添加历史，重复几何只保留最近三个不�
     [shape(2), shape(5), shape(3)],
   );
   repository.close();
+});
+const osmRoute = () => ({
+  ...trip(),
+  quality: 'corridor',
+  routeProvider: 'osm-local',
+  routeDataVersion: 'osm-v1',
+  routeEvidence: { relationId: 123, relationVersion: 1 },
+  routeSource: 'OpenStreetMap · 合成参考区间',
+  routeSourceUrl: 'https://www.openstreetmap.org/relation/123',
+  routeNote: '合成来源说明',
+  routeFetchedAt: '2026-09-26T12:00:00Z',
+  routeConfirmed: true,
+  requiresConfirmation: true,
+});
+test('已接受示意的同来源同几何刷新复用确认，缺失来源不能静默复用授权', async () => {
+  const { repository } = await setup();
+  try {
+    const response = {
+      ...trip(),
+      quality: 'station-schematic',
+      routeProvider: 'railgo',
+      requiresConfirmation: true,
+      resolution: { state: 'needs-confirmation', requiresConfirmation: true },
+    };
+    let [current] = await repository.saveTrips([
+      {
+        ...response,
+        departure: '2026-09-26T08:30',
+        routeConfirmed: true,
+        routeCandidate: null,
+        routeDataVersion: null,
+        routeEvidence: null,
+      },
+    ]);
+    await repository.updateRoute(current, response);
+    current = (await repository.snapshot()).trips[0];
+    assert.equal(current.departure, '2026-09-26T08:30');
+    assert.equal(current.routeConfirmed, true);
+    assert.equal(current.routeProvider, 'railgo');
+    assert.equal(current.routeCandidate, null);
+    const unknown = { ...response };
+    delete unknown.routeProvider;
+    await repository.updateRoute(current, unknown);
+    const saved = (await repository.snapshot()).trips[0];
+    assert.equal(saved.routeConfirmed, true);
+    assert.equal(saved.routeProvider, 'railgo');
+    assert.ok(saved.routeCandidate);
+    assert.equal(saved.routeCandidate.routeProvider, undefined);
+  } finally {
+    repository.close();
+  }
+});
+test('OSM 升级为 RailGo 主线时清除缺省来源元信息，历史保留原证据', async () => {
+  const { repository } = await setup();
+  try {
+    const [current] = await repository.saveTrips([osmRoute()]);
+    await repository.updateRoute(current, {
+      ...trip(),
+      routeProvider: 'railgo',
+      routeSource: 'RailGo',
+      routeCoordinates: [
+        [118, 32],
+        [118.5, 32.1],
+        [119, 32],
+      ],
+    });
+    const saved = (await repository.snapshot()).trips[0];
+    assert.equal(saved.routeProvider, 'railgo');
+    assert.equal(saved.routeSource, 'RailGo');
+    for (const field of [
+      'routeDataVersion',
+      'routeEvidence',
+      'routeSourceUrl',
+      'routeNote',
+      'routeFetchedAt',
+    ])
+      assert.equal(saved[field], null, field);
+    assert.equal(saved.routeCandidate, null);
+    assert.equal(saved.routeHistory[0].routeProvider, 'osm-local');
+    assert.equal(saved.routeHistory[0].routeDataVersion, 'osm-v1');
+    assert.deepEqual(
+      saved.routeHistory[0].routeEvidence,
+      osmRoute().routeEvidence,
+    );
+  } finally {
+    repository.close();
+  }
+});
+test('恢复无新元信息的旧 RailGo 历史不会继承 OSM 来源，备份保留各版本归属', async () => {
+  const { repository } = await setup();
+  const { repository: target } = await setup();
+  try {
+    const [old] = await repository.saveTrips([
+      { ...trip(), routeSource: 'RailGo' },
+    ]);
+    const [current] = await repository.saveTrips([
+      {
+        ...osmRoute(),
+        revision: old.revision,
+        routeRevision: old.routeRevision,
+        routeCoordinates: [
+          [118, 32],
+          [118.5, 32.1],
+          [119, 32],
+        ],
+      },
+    ]);
+    const restored = await repository.restoreRoute(
+      current.id,
+      current.routeHistory[0].id,
+      current.revision,
+    );
+    assert.equal(restored.routeSource, 'RailGo');
+    assert.equal(restored.routeProvider, undefined);
+    assert.equal(restored.routeDataVersion, null);
+    assert.equal(restored.routeEvidence, null);
+    assert.equal(restored.routeNote, null);
+    assert.equal(restored.routeSourceUrl, null);
+    assert.equal(restored.routeFetchedAt, null);
+    assert.equal(restored.routeFrozen, true);
+    assert.equal(restored.routeHistory[0].routeProvider, 'osm-local');
+    assert.deepEqual(
+      restored.routeHistory[0].routeEvidence,
+      osmRoute().routeEvidence,
+    );
+    const backup = await repository.exportBackup();
+    await target.applyRestore(await target.previewRestore(backup));
+    const imported = (await target.snapshot()).trips[0];
+    assert.equal(imported.routeProvider, undefined);
+    assert.equal(imported.routeDataVersion, null);
+    assert.equal(imported.routeHistory[0].routeDataVersion, 'osm-v1');
+    assert.deepEqual(
+      imported.routeHistory[0].routeEvidence,
+      osmRoute().routeEvidence,
+    );
+  } finally {
+    repository.close();
+    target.close();
+  }
+});
+test('同几何候选改变版本、来源或证据时必须重新接受，主线与备份保留各自元信息', async (t) => {
+  for (const [name, patch] of [
+    ['版本', { routeDataVersion: 'osm-v2' }],
+    ['查询来源', { routeProvider: 'railgo', routeSource: 'RailGo' }],
+    [
+      '实际来源',
+      { routeSourceUrl: 'https://www.openstreetmap.org/relation/456' },
+    ],
+    ['证据', { routeEvidence: { relationId: 123, relationVersion: 2 } }],
+  ]) {
+    await t.test(name, async () => {
+      const { repository } = await setup();
+      const { repository: target } = await setup();
+      try {
+        const [current] = await repository.saveTrips([osmRoute()]);
+        await repository.updateRoute(current, { ...osmRoute(), ...patch });
+        const saved = (await repository.snapshot()).trips[0];
+        assert.equal(saved.routeDataVersion, 'osm-v1');
+        assert.equal(saved.routeProvider, 'osm-local');
+        assert.deepEqual(saved.routeEvidence, current.routeEvidence);
+        assert.equal(saved.routeConfirmed, true);
+        assert.equal(saved.routeHistory.length, 0);
+        for (const [field, value] of Object.entries(patch))
+          assert.deepEqual(saved.routeCandidate[field], value);
+        const backup = await repository.exportBackup();
+        await target.applyRestore(await target.previewRestore(backup));
+        const imported = (await target.snapshot()).trips[0];
+        assert.equal(imported.routeDataVersion, 'osm-v1');
+        assert.deepEqual(imported.routeCandidate, saved.routeCandidate);
+      } finally {
+        repository.close();
+        target.close();
+      }
+    });
+  }
+});
+test('OSM 来源即使缺少 requiresConfirmation 标志也必须确认，新鲜度变化不撤销同版本确认', async () => {
+  const { repository } = await setup();
+  try {
+    let [current] = await repository.saveTrips([osmRoute()]);
+    await repository.updateRoute(current, {
+      ...osmRoute(),
+      routeFetchedAt: '2026-09-27T12:00:00Z',
+      routeNote: '说明更新，几何与证据未变',
+    });
+    current = (await repository.snapshot()).trips[0];
+    assert.equal(current.routeCandidate, null);
+    assert.equal(current.routeConfirmed, true);
+    assert.equal(current.routeHistory.length, 0);
+    const next = { ...osmRoute(), routeDataVersion: 'osm-v2' };
+    delete next.requiresConfirmation;
+    await repository.updateRoute(current, next);
+    const saved = (await repository.snapshot()).trips[0];
+    assert.equal(saved.routeDataVersion, 'osm-v1');
+    assert.equal(saved.routeCandidate.routeDataVersion, 'osm-v2');
+    assert.equal(saved.routeConfirmed, true);
+  } finally {
+    repository.close();
+  }
 });
 test('迁移v1一次且保留原文，合法与损坏记录隔离', async () => {
   const valid = trip(),

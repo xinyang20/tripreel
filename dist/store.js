@@ -1,4 +1,6 @@
 import { createRepository, LEGACY_KEY } from './repository.js';
+import { prepareReadOnlyTrip } from './domain.js';
+import { measureStage } from './performance.js';
 export const $ = (id) => document.getElementById(id);
 export const esc = (value) =>
   String(value ?? '').replace(
@@ -25,6 +27,7 @@ export const state = {
   stations: [],
   airports: [],
   datasetRevision: 0,
+  preferences: { railProvider: 'railgo' },
   recovery: { items: [], rawLegacy: null, error: null, legacyChanged: false },
 };
 export const repository = createRepository();
@@ -91,32 +94,74 @@ export async function api(
 }
 export const changed = () =>
   document.dispatchEvent(new Event('journey-change'));
-function accept(snapshot, { render = true, personal = false } = {}) {
+function accept(snapshot, options) {
+  return measureStage('accept', () => acceptSnapshot(snapshot, options));
+}
+function acceptSnapshot(snapshot, { render = true, personal = false } = {}) {
   if (state.ready && snapshot.datasetRevision < state.datasetRevision)
     return snapshot;
-  state.saved = snapshot.trips;
-  state.groups = snapshot.groups;
-  state.drafts = snapshot.drafts;
+  const draftOnly =
+    snapshot.partial &&
+    snapshot.kind === 'drafts' &&
+    !snapshot.trips.length &&
+    !snapshot.removedTripIds?.length &&
+    !snapshot.groups;
+  if (
+    snapshot.partial &&
+    (snapshot.trips.length || snapshot.removedTripIds?.length)
+  ) {
+    const removed = new Set(snapshot.removedTripIds || []);
+    const records = new Map(
+      state.saved
+        .filter((trip) => !removed.has(trip.id))
+        .map((trip) => [trip.id, trip]),
+    );
+    for (const trip of snapshot.trips) {
+      const previous = records.get(trip.id);
+      if (previous && previous.routeRevision === trip.routeRevision) {
+        // Repository transactions increment routeRevision whenever primary
+        // route fields change. Keep immutable geometry and its derived caches
+        // across grouping, freezing and failed refresh attempts.
+        for (const field of ['routeCoordinates', 'legs', 'stops'])
+          if (previous[field] !== undefined) trip[field] = previous[field];
+      }
+      records.set(trip.id, prepareReadOnlyTrip(trip));
+    }
+    state.saved = [...records.values()].sort((a, b) =>
+      (a.departure || a.travelDate || '').localeCompare(
+        b.departure || b.travelDate || '',
+      ),
+    );
+  } else if (!snapshot.partial)
+    state.saved = snapshot.trips.map(prepareReadOnlyTrip);
+  if (snapshot.groups) state.groups = snapshot.groups;
+  if (snapshot.drafts) state.drafts = snapshot.drafts;
   state.datasetRevision = snapshot.datasetRevision;
-  state.recovery = snapshot.recovery;
-  state.locked = snapshot.locked;
+  if (snapshot.recovery) state.recovery = snapshot.recovery;
+  if (snapshot.locked !== undefined) state.locked = snapshot.locked;
   state.ready = true;
   if (personal) state.demo = false;
-  if (!state.demo) state.trips = [...snapshot.trips];
+  if (!state.demo && !draftOnly) state.trips = [...state.saved];
   const label = state.locked
     ? '原数据需要救援，已停止覆盖'
     : state.recovery.items.length
       ? '部分旧记录需修复，已保留原始数据'
       : '已保存在此浏览器';
   if ($('save-status')) $('save-status').textContent = label;
-  if (render) changed();
+  if (render) {
+    if (draftOnly) document.dispatchEvent(new Event('draft-change'));
+    else changed();
+  }
   return snapshot;
 }
 export async function load() {
   if (loadPromise) return loadPromise;
   loadPromise = repository
     .init()
-    .then((snapshot) => accept(snapshot, { render: false }))
+    .then(async (snapshot) => {
+      state.preferences = await repository.loadPreferences();
+      return accept(snapshot, { render: false });
+    })
     .catch((error) => {
       state.locked = true;
       state.ready = true;
@@ -132,85 +177,89 @@ export async function load() {
     });
   return loadPromise;
 }
-async function refresh(options) {
-  return accept(await repository.snapshot(), options);
+let synchronizing = Promise.resolve();
+function synchronize(change) {
+  const operation = synchronizing.then(async () => {
+    if (change.kind === 'preferences') {
+      state.preferences = await repository.loadPreferences();
+      document.dispatchEvent(new Event('preferences-change'));
+      return;
+    }
+    if (
+      state.ready &&
+      Number.isInteger(change.revision) &&
+      change.revision <= state.datasetRevision
+    )
+      return;
+    accept(await repository.readChanges(change, state.datasetRevision));
+  });
+  synchronizing = operation.catch((error) => toast(error.message));
+  return synchronizing;
+}
+repository.subscribeCommits(synchronize);
+function showPersonal() {
+  if (!state.demo) return;
+  state.demo = false;
+  state.trips = [...state.saved];
+  changed();
 }
 export async function saveTrips(trips, options) {
   if (!state.ready) await load();
   if (state.locked) throw new Error('原记录需要救援，暂不能保存。');
   const saved = await repository.saveTrips(trips, options);
-  state.progress = 0;
-  state.playing = false;
-  await refresh({ personal: true });
+  showPersonal();
   return saved;
 }
 // Compatibility for old callers: updates/additions only. Deletion uses deleteTrip.
 export const commit = (trips, options) => saveTrips(trips, options);
 export async function deleteTrip(id, revision) {
   const result = await repository.deleteTrip(id, revision);
-  await refresh({ personal: true });
+  showPersonal();
   return result;
 }
 export async function saveDraft(draft) {
-  const saved = await repository.saveDraft(draft);
-  state.drafts = await repository.listDrafts();
-  document.dispatchEvent(new Event('draft-change'));
-  return saved;
+  return repository.saveDraft(draft);
 }
 export const listDrafts = () => repository.listDrafts();
 export async function deleteDraft(id, revision) {
-  const result = await repository.deleteDraft(id, revision);
-  state.drafts = await repository.listDrafts();
-  document.dispatchEvent(new Event('draft-change'));
-  return result;
+  return repository.deleteDraft(id, revision);
 }
 export async function saveGroup(group) {
-  const result = await repository.saveGroup(group);
-  await refresh();
-  return result;
+  return repository.saveGroup(group);
 }
 export async function deleteGroup(id, revision) {
-  const result = await repository.deleteGroup(id, revision);
-  await refresh();
-  return result;
+  return repository.deleteGroup(id, revision);
+}
+export const assignGroup = (records, groupId) =>
+  repository.assignGroup(records, groupId);
+export async function loadPreferences() {
+  state.preferences = await repository.loadPreferences();
+  return state.preferences;
+}
+export async function savePreferences(patch) {
+  const value = await repository.savePreferences(patch);
+  // The commit listener rereads the latest preferences after concurrent writes.
+  return state.preferences || value;
 }
 export const exportBackup = (options) => repository.exportBackup(options);
 export const previewRestore = (data) => repository.previewRestore(data);
 export async function applyRestore(preview, selections) {
   const result = await repository.applyRestore(preview, selections);
-  await refresh({ personal: true });
+  showPersonal();
   return result;
 }
 export async function setRouteFrozen(id, frozen, revision, routeRevision) {
-  const result = await repository.setRouteFrozen(
-    id,
-    frozen,
-    revision,
-    routeRevision,
-  );
-  await refresh();
-  return result;
+  return repository.setRouteFrozen(id, frozen, revision, routeRevision);
 }
 export async function restoreRoute(id, versionId, revision) {
-  const result = await repository.restoreRoute(id, versionId, revision);
-  await refresh();
-  return result;
+  return repository.restoreRoute(id, versionId, revision);
 }
 export async function updateStoredRoute(original, route, options) {
   if (state.locked || $('editor')?.open) return false;
-  try {
-    const result = await repository.updateRoute(original, route, options);
-    if (result) await refresh();
-    return result;
-  } catch (error) {
-    if (error.routeAttemptRecorded) await refresh();
-    throw error;
-  }
+  return repository.updateRoute(original, route, options);
 }
 export async function recordRouteAttempt(original, error, options) {
-  const result = await repository.recordRouteAttempt(original, error, options);
-  if (result) await refresh();
-  return result;
+  return repository.recordRouteAttempt(original, error, options);
 }
 repository.subscribe(async (message) => {
   if (message.upgrade) {
@@ -219,13 +268,8 @@ repository.subscribe(async (message) => {
     return;
   }
   try {
-    if (message.kind === 'drafts') {
-      state.drafts = await repository.listDrafts();
-      document.dispatchEvent(new Event('draft-change'));
-      return;
-    }
-    await refresh();
-    if ($('editor')?.open)
+    await synchronize(message);
+    if ($('editor')?.open && !['drafts', 'preferences'].includes(message.kind))
       toast('其他页面已修改数据，当前输入已保留；保存时会核对版本。');
   } catch (error) {
     toast(error.message);

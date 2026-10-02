@@ -1,0 +1,45 @@
+{
+  "source": "12306公开停站查询",
+  "sourceUrl": "https://kyfw.12306.cn/otn/czxx/queryByTrainNo?train_no=24000000G10L&from_station_telecode=VNP&to_station_telecode=AOH&depart_date=2026-10-02",
+  "checkedDate": "2026-10-02",
+  "number": "G1",
+  "trainNo": "24000000G10L",
+  "stops": [
+    {
+      "name": "北京南",
+      "arrive": "----",
+      "depart": "06:30"
+    },
+    {
+      "name": "沧州西",
+      "arrive": "07:18",
+      "depart": "07:20"
+    },
+    {
+      "name": "德州东",
+      "arrive": "07:45",
+      "depart": "07:47"
+    },
+    {
+      "name": "曲阜东",
+      "arrive": "08:34",
+      "depart": "08:36"
+    },
+    {
+      "name": "南京南",
+      "arrive": "10:13",
+      "depart": "10:15"
+    },
+    {
+      "name": "苏州北",
+      "arrive": "10:59",
+      "depart": "11:01"
+    },
+    {
+      "name": "上海虹桥",
+      "arrive": "11:24",
+      "depart": "11:24"
+    }
+  ],
+  "note": "为车次线路白名单保留的当次核对事实，不作为离线时刻查询服务；在线查询仍逐次核对完整停站序列。"
+}

@@ -80,6 +80,11 @@ const store = await import('../dist/store.js');
 test('异步facade迁移并更新旧G1802，原时刻与参考来源保留且失败临时显示', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   await store.load();
+  store.state.capabilities = {
+    deployment: 'local',
+    railgoEnabled: true,
+    autoRefreshRoutes: true,
+  };
   assert.equal(store.state.ready, true);
   assert.equal(store.state.saved.length, 1);
   const response = {
@@ -168,6 +173,70 @@ test('facade保存必须await，分组及草稿同步快照，删除不使用旧
   assert.equal(saved.routeState, 'pending');
   await store.deleteTrip(saved.id, saved.revision);
   assert.equal(store.state.saved.length, 1);
+});
+test('facade按变更合并并保留无关记录引用，草稿和来源偏好不触发行程事件', async () => {
+  const current = store.state.saved[0];
+  const events = [];
+  const originalDispatch = document.dispatchEvent;
+  document.dispatchEvent = (event) => events.push(event.type);
+  try {
+    const [saved] = await store.saveTrips([
+      {
+        id: 'incremental',
+        mode: 'train',
+        number: 'G99',
+        travelDate: '2030-04-01',
+        from: { name: '甲' },
+        to: { name: '乙' },
+        revision: 0,
+      },
+    ]);
+    assert.equal(
+      store.state.saved.find((trip) => trip.id === current.id),
+      current,
+    );
+    assert.equal(Object.isFrozen(current), true);
+    assert.equal(Object.isFrozen(current.routeCoordinates), true);
+    const primaryGeometry = current.routeCoordinates;
+    await store.assignGroup(
+      [{ id: current.id, revision: current.revision }],
+      null,
+    );
+    const regrouped = store.state.saved.find((trip) => trip.id === current.id);
+    assert.equal(regrouped.routeCoordinates, primaryGeometry);
+    events.length = 0;
+    const before = store.state.datasetRevision;
+    const filtered = [regrouped];
+    store.state.trips = filtered;
+    const draft = await store.saveDraft({
+      id: 'incremental-draft',
+      revision: 0,
+    });
+    assert.deepEqual(events, ['draft-change']);
+    assert.equal(store.state.datasetRevision, before + 1);
+    assert.equal(store.state.trips, filtered);
+    assert.equal(
+      store.state.saved.find((trip) => trip.id === current.id),
+      regrouped,
+    );
+    await store.deleteDraft(draft.id, draft.revision);
+    events.length = 0;
+    const dataRevision = store.state.datasetRevision;
+    assert.equal(
+      (await store.savePreferences({ railProvider: 'osm-local' })).railProvider,
+      'osm-local',
+    );
+    assert.deepEqual(events, ['preferences-change']);
+    assert.equal(store.state.datasetRevision, dataRevision);
+    assert.equal(
+      store.state.saved.find((trip) => trip.id === current.id),
+      regrouped,
+    );
+    await store.savePreferences({ railProvider: 'railgo' });
+    await store.deleteTrip(saved.id, saved.revision);
+  } finally {
+    document.dispatchEvent = originalDispatch;
+  }
 });
 test('API合并外部取消和预算；未确认新示意不直接回放', async () => {
   let observed;

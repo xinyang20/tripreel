@@ -6,6 +6,9 @@ import {
   canRenderRoute,
   canReplay,
   tripIssues,
+  tripSummary,
+  prepareReadOnlyTrip,
+  routeLabel,
 } from '../dist/domain.js';
 const base = {
   id: 'a',
@@ -112,4 +115,68 @@ test('不同分组仍需校验时间冲突，缺时刻记录不虚构重叠', ()
   assert.doesNotThrow(() =>
     validateRecord({ ...base, arrival: undefined }, [{ ...base, id: 'b' }]),
   );
+});
+test('只为完整冻结的读取记录缓存派生信息，可编辑输入修改后重新验证', () => {
+  const fixed = prepareReadOnlyTrip(normalizeTrip(base));
+  assert.equal(tripSummary(fixed), tripSummary(fixed));
+  assert.equal(tripIssues(fixed), tripIssues(fixed));
+  assert.throws(() => {
+    fixed.routeCoordinates[0][0] = 999;
+  }, TypeError);
+  const editable = structuredClone(fixed);
+  assert.equal(canReplay(editable), true);
+  editable.routeCoordinates[0][0] = 999;
+  assert.equal(canReplay(editable), false);
+  assert.equal(tripSummary(editable).renderable, false);
+  assert.ok(
+    tripIssues(editable).some((issue) => issue.code === 'missing-route'),
+  );
+});
+test('OSM来源和其他需要确认的线路只能在确认后绘制回放，并保留来源元数据', () => {
+  const trip = normalizeTrip({
+    ...base,
+    quality: 'corridor',
+    routeProvider: 'osm-local',
+    routeSource: 'OpenStreetMap · 合成参考区间',
+    routeDataVersion: '2026-10',
+    routeEvidence: { kind: 'route-relation' },
+    requiresConfirmation: true,
+  });
+  assert.equal(trip.routeState, 'ready');
+  assert.equal(canRenderRoute(trip), false);
+  assert.equal(canReplay(trip), false);
+  const confirmed = { ...trip, routeConfirmed: true };
+  assert.equal(canReplay(confirmed), true);
+  assert.equal(routeLabel(confirmed), 'OSM 线路参考');
+  assert.ok(
+    tripIssues(confirmed).some((issue) => issue.message.includes('OSM')),
+  );
+  assert.equal(canRenderRoute({ ...base, requiresConfirmation: true }), false);
+  assert.doesNotThrow(() =>
+    validateRecord({
+      ...base,
+      routeProvider: undefined,
+      routeDataVersion: null,
+      routeEvidence: null,
+    }),
+  );
+});
+test('查询来源不改变实际几何标签，只有 OSM 区间参考使用 OSM 标签', () => {
+  const trip = { ...base, routeProvider: 'osm-local', routeConfirmed: true };
+  for (const [quality, routeSource, expected] of [
+    ['station-schematic', '12306 停站', '停站连线示意'],
+    ['manual-schematic', '用户填写', '手动途经点示意'],
+    ['latest', 'RailGo', '最新车次线路'],
+    ['corridor', 'RailGo', '同线区间参考'],
+    ['corridor', undefined, '同线区间参考'],
+    ['latest', 'OpenStreetMap · 合成参考区间', '最新车次线路'],
+    ['corridor', 'OpenStreetMap · 合成参考区间', 'OSM 线路参考'],
+  ]) {
+    const record = { ...trip, quality, routeSource };
+    assert.equal(routeLabel(record), expected);
+    assert.equal(
+      tripIssues(record).some((issue) => issue.message.includes('OSM')),
+      expected === 'OSM 线路参考',
+    );
+  }
 });

@@ -29,6 +29,9 @@ export function routeRequest(draft, lookup) {
   }
   return {
     mode: draft.mode,
+    ...(draft.mode === 'train' && draft.provider
+      ? { provider: draft.provider }
+      : {}),
     number: draft.number,
     date: draft.queryDate || lookup?.date || draft.date,
     from: draft.from,
@@ -45,4 +48,12 @@ export function routeRequest(draft, lookup) {
   };
 }
 export const routeKey = (draft, lookup) =>
-  JSON.stringify({ requestedDate: draft.date, ...routeRequest(draft, lookup) });
+  JSON.stringify({
+    requestedDate: draft.date,
+    ...routeRequest(draft, lookup),
+    ...(draft.mode === 'train' &&
+    draft.provider === 'osm-local' &&
+    draft.providerDataVersion !== undefined
+      ? { providerDataVersion: draft.providerDataVersion }
+      : {}),
+  });

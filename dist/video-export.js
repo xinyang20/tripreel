@@ -6,16 +6,22 @@ import {
   baseStyle,
   installJourneyLayers,
   journeyBounds,
-  journeyWorldPoints,
+  prepareJourneyWorldPoints,
   avatarPixel,
 } from './map-scene.js';
 import { fitInViewport } from './camera-fit.js';
 import { buildTimeline, replayFrame } from './replay.js';
 import { endpointPlaces, layoutPlaceLabels } from './map-labels.js';
-import { videoViewportBlockers } from './video-layout.js';
+import {
+  videoViewportBlockers,
+  videoShotKey,
+  prepareVideoShots,
+  videoAttribution,
+} from './video-layout.js';
 import {
   videoBudget,
   recommendedSpeed,
+  videoSnapshot,
   videoPresentation,
   videoRouteNote,
   videoFilename,
@@ -113,7 +119,7 @@ function revokeDownload() {
 }
 export function openVideoExport(options) {
   if (controller) return;
-  settings = { ...options, trips: structuredClone(options.trips) };
+  settings = { ...options, trips: videoSnapshot(options.trips) };
   $('video-speed').value = String(recommendedSpeed(settings.trips));
   revokeDownload();
   $('video-stage').classList.add('hidden');
@@ -169,7 +175,15 @@ function rounded(ctx, x, y, w, h, r, fill, stroke) {
     ctx.stroke();
   }
 }
-function renderMovieFrame(ctx, canvas, map, visual, projection, options) {
+function renderMovieFrame(
+  ctx,
+  canvas,
+  map,
+  visual,
+  projection,
+  options,
+  labelCache,
+) {
   const scale = canvas.width / 1280,
     w = 1280,
     h = 720;
@@ -182,23 +196,37 @@ function renderMovieFrame(ctx, canvas, map, visual, projection, options) {
   ctx.fillStyle = shade;
   ctx.fillRect(0, 0, w, 180);
   ctx.font = '12px "PingFang SC","Microsoft YaHei",sans-serif';
-  const labels = layoutPlaceLabels(
-    visual.overview ? endpointPlaces(options.trips) : visual.frame.places,
-    {
-      project: (c) => {
-        const p = map.project(c);
-        return { x: p.x / scale, y: p.y / scale };
+  const center = map.getCenter(),
+    labelKey = [
+      visual.overview
+        ? 'overview'
+        : visual.frame.item.type + visual.frame.trip.id,
+      center.lng,
+      center.lat,
+      map.getZoom(),
+      map.getPitch(),
+      map.getBearing(),
+    ].join('|');
+  if (labelCache.key !== labelKey) {
+    labelCache.key = labelKey;
+    labelCache.labels = layoutPlaceLabels(
+      visual.overview ? labelCache.overviewPlaces : visual.frame.places,
+      {
+        project: (c) => {
+          const p = map.project(c);
+          return { x: p.x / scale, y: p.y / scale };
+        },
+        zoom: map.getZoom() - Math.log2(scale),
+        width: w,
+        height: h,
+        cityIndex: options.cityIndex,
+        detail: !visual.overview,
+        blockers: videoViewportBlockers(),
+        measure: (name) => ctx.measureText(name).width + 26,
       },
-      zoom: map.getZoom() - Math.log2(scale),
-      width: w,
-      height: h,
-      cityIndex: options.cityIndex,
-      detail: !visual.overview,
-      blockers: videoViewportBlockers(),
-      measure: (name) => ctx.measureText(name).width + 26,
-    },
-  );
-  for (const l of labels) {
+    );
+  }
+  for (const l of labelCache.labels) {
     ctx.beginPath();
     ctx.moveTo(l.anchorX, l.anchorY);
     ctx.lineTo(
@@ -280,7 +308,7 @@ function renderMovieFrame(ctx, canvas, map, visual, projection, options) {
   );
   ctx.font = '12px "PingFang SC",sans-serif';
   ctx.fillStyle = '#638398';
-  ctx.fillText(videoRouteNote(visual.frame.trip), 61, 661);
+  ctx.fillText(labelCache.routeNotes.get(visual.frame.trip.id), 61, 661);
   ctx.textAlign = 'right';
   ctx.fillText(
     options.hideDates
@@ -297,10 +325,8 @@ function renderMovieFrame(ctx, canvas, map, visual, projection, options) {
   ctx.textAlign = 'right';
   ctx.font = '10px sans-serif';
   ctx.fillStyle = '#4c718a';
-  ctx.fillText(
-    '线路 RailGo · © Natural Earth · © OpenStreetMap contributors',
-    1240,
-    705,
+  labelCache.attribution.forEach((line, i, lines) =>
+    ctx.fillText(line, 1240, 709 - (lines.length - 1 - i) * 12),
   );
 }
 async function recordMovie(options, canvas, signal, onProgress) {
@@ -337,7 +363,12 @@ async function recordMovie(options, canvas, signal, onProgress) {
     failRecording,
     renderFailure,
     visual = { overview: true, progress: 0, frame: replayFrame(timeline, 0) };
-  const chunks = [];
+  const chunks = [],
+    labelCache = {
+      overviewPlaces: endpointPlaces(options.trips),
+      attribution: videoAttribution(options.trips),
+      routeNotes: new Map(),
+    };
   let recordedBytes = 0;
   const interrupt = (error) => {
     renderFailure = error;
@@ -371,48 +402,68 @@ async function recordMovie(options, canvas, signal, onProgress) {
       canvasContextAttributes: { preserveDrawingBuffer: true },
     });
     await waitMap(map, 'load', signal);
-    installJourneyLayers(map, options.trips, (matrix) => (projection = matrix));
-    const cameras = new Map(),
-      scale = width / 1280;
-    const frameTrip = (trips) => {
-      const key = trips.map((t) => t.id).join('|');
-      if (!cameras.has(key))
-        cameras.set(
-          key,
-          fitInViewport(journeyWorldPoints(trips), {
-            width,
-            height,
-            pitch: options.pitch,
-            bearing: options.bearing,
-            fov: map.getVerticalFieldOfView(),
-            maxZoom: 13,
-            edge: 28 * scale,
-            gap: 20 * scale,
-            blockers: videoViewportBlockers(scale),
-          }),
-        );
-      const fit = cameras.get(key);
-      if (fit) map.jumpTo({ ...fit.camera, padding: 0 });
-      else
-        map.fitBounds(journeyBounds(trips), {
-          padding: 60 * scale,
-          maxZoom: 12,
+    const scale = width / 1280,
+      preparationStart = performance.now();
+    const cameras = await prepareVideoShots(
+      options.trips,
+      timeline,
+      async (trips) => {
+        for (const trip of trips)
+          if (!labelCache.routeNotes.has(trip.id))
+            labelCache.routeNotes.set(trip.id, videoRouteNote(trip));
+        const points = await prepareJourneyWorldPoints(trips, { signal });
+        const fit = fitInViewport(points, {
+          width,
+          height,
           pitch: options.pitch,
           bearing: options.bearing,
-          duration: 0,
-          retainPadding: false,
+          fov: map.getVerticalFieldOfView(),
+          maxZoom: 13,
+          edge: 28 * scale,
+          gap: 20 * scale,
+          blockers: videoViewportBlockers(scale),
         });
+        const camera =
+          fit?.camera ||
+          map.cameraForBounds(journeyBounds(trips), {
+            padding: 60 * scale,
+            maxZoom: 12,
+            bearing: options.bearing,
+          });
+        if (!camera) throw new Error('无法完整容纳视频线路，请缩小导出范围。');
+        return {
+          ...camera,
+          pitch: options.pitch,
+          bearing: options.bearing,
+          padding: 0,
+        };
+      },
+      { signal },
+    );
+    signal.throwIfAborted();
+    canvas.dataset.prepareMs = String(performance.now() - preparationStart);
+    installJourneyLayers(map, options.trips, (matrix) => (projection = matrix));
+    const frameTrip = (trips) => {
+      const camera = cameras.get(videoShotKey(trips));
+      if (!camera) throw new Error('视频镜头准备不完整，请重新生成。');
+      map.jumpTo(camera);
     };
-    // Precompute individual shots before recording; 32× playback must not stall on fitting.
-    for (const t of options.trips) frameTrip([t]);
     frameTrip(options.trips);
     await waitMap(map, 'idle', signal);
     if (signal.aborted) throw abortError();
-    renderMovieFrame(ctx, canvas, map, visual, projection, options);
+    renderMovieFrame(ctx, canvas, map, visual, projection, options, labelCache);
     // Drawing is kept in the render event so the WebGL frame and its 3D projection match.
     renderHandler = () => {
       try {
-        renderMovieFrame(ctx, canvas, map, visual, projection, options);
+        renderMovieFrame(
+          ctx,
+          canvas,
+          map,
+          visual,
+          projection,
+          options,
+          labelCache,
+        );
       } catch (error) {
         renderFailure = error;
         failRecording?.(error);

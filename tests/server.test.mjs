@@ -501,11 +501,19 @@ test('HTTP 接口校验 Host、Origin、方法、JSON 和请求体上限', async
 
 test('默认本机能力保持 RailGo 可用，公开配置校验 HTTPS origin', async (t) => {
   const { api } = await localServer(t);
-  assert.deepEqual((await api('/api/capabilities')).data, {
-    deployment: 'local',
-    railgoEnabled: true,
-    notice: '',
-  });
+  const { data } = await api('/api/capabilities');
+  assert.equal(data.deployment, 'local');
+  assert.equal(data.railgoEnabled, true);
+  assert.equal(data.notice, '');
+  assert.equal(data.defaultRailProvider, 'railgo');
+  assert.equal(data.autoRefreshRoutes, true);
+  assert.deepEqual(
+    data.railProviders.map((provider) => [provider.id, provider.available]),
+    [
+      ['railgo', true],
+      ['osm-local', true],
+    ],
+  );
   for (const publicOrigin of [
     'http://tripreel.xinyang20.cn',
     'https://tripreel.xinyang20.cn/path',
@@ -544,12 +552,11 @@ test('公开部署按精确 Host 和 Origin 校验，不信任转发头', async 
   });
   assert.equal(capabilities.status, 200);
   assert.equal(capabilities.headers['cache-control'], 'no-store');
-  assert.deepEqual(capabilities.data, {
-    deployment: 'public',
-    railgoEnabled: false,
-    notice:
-      '此部署已停用 RailGo 在线轨道查询；火车可使用停站或手动途经点示意，飞机使用示意弧线。',
-  });
+  assert.equal(capabilities.data.deployment, 'public');
+  assert.equal(capabilities.data.railgoEnabled, false);
+  assert.match(capabilities.data.notice, /已停用 RailGo/);
+  assert.equal(capabilities.data.defaultRailProvider, 'osm-local');
+  assert.equal(capabilities.data.autoRefreshRoutes, false);
   assert.equal(
     (await httpJSON(base, '/api/diagnostics', { headers: { Host } })).data
       .localOnly,
@@ -639,9 +646,9 @@ test('停用 RailGo 的缺线路提示不可重试，手工和飞机示意不依
   const body = { mode: 'train', number: 'K1', from: '甲', to: '丙' };
   const pending = await api('/api/route', body);
   assert.equal(pending.data.resolution.state, 'unavailable');
-  assert.equal(pending.data.resolution.code, 'NO_RAIL_DATA');
+  assert.equal(pending.data.resolution.code, 'OSM_ROUTE_UNAVAILABLE');
   assert.equal(pending.data.resolution.retryable, false);
-  assert.match(pending.data.resolution.message, /已停用 RailGo/);
+  assert.match(pending.data.resolution.message, /完整停站表/);
   const manual = await api('/api/route', {
     ...body,
     via: '乙',
@@ -656,6 +663,133 @@ test('停用 RailGo 的缺线路提示不可重试，手工和飞机示意不依
   });
   assert.equal(flight.data.quality, 'schematic');
   assert.equal(calls, 0);
+});
+
+test('公开模式强制禁用 RailGo，拒绝显式请求且不会触发上游', async (t) => {
+  let calls = 0;
+  const { api } = await localServer(t, {
+    publicOrigin: 'https://tripreel.xinyang20.cn',
+    railgoEnabled: true,
+    fetchImpl: async () => {
+      calls++;
+      throw new Error('must not query');
+    },
+  });
+  assert.equal((await api('/api/capabilities')).data.railgoEnabled, false);
+  const denied = await api('/api/route', {
+    mode: 'train',
+    number: 'G1',
+    date: '2026-10-02',
+    from: '甲',
+    to: '丙',
+    provider: 'railgo',
+  });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.data.code, 'RAIL_PROVIDER_DISABLED');
+  assert.equal(calls, 0);
+});
+
+test('本机主动选择 OSM 或无效来源不暗中查询 RailGo', async (t) => {
+  const upstream = provider({ emptyTrack: false });
+  const { api } = await localServer(t, upstream);
+  const body = {
+    mode: 'train',
+    number: 'K1',
+    date: '2026-09-26',
+    from: '甲',
+    to: '丙',
+  };
+  const result = await api('/api/route', { ...body, provider: 'osm-local' });
+  assert.equal(result.data.quality, 'station-schematic');
+  assert.equal(result.data.routeProvider, 'osm-local');
+  assert.ok(upstream.calls.every((url) => !url.includes('zenglingkun')));
+  assert.equal(
+    (await api('/api/route', { ...body, provider: 'other' })).status,
+    400,
+  );
+});
+
+test('OSM 白名单区间通过独立停站核对后返回待确认轨道参考', async (t) => {
+  const dataset = JSON.parse(
+    await readFile(
+      new URL('../dist/data/rail-corridors.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  const corridor = dataset.corridors[0],
+    train = corridor.trains[0];
+  const places = train.stops.map((name, index) => ({
+    name,
+    code: `S${String(index).padStart(2, '0')}`,
+    coord: corridor.stations.find((stop) => stop.name === name)?.coord || [
+      116, 39,
+    ],
+  }));
+  const calls = [];
+  let today = '2026-10-02';
+  const { api } = await localServer(t, {
+    publicOrigin: 'https://tripreel.xinyang20.cn',
+    stations: places,
+    osmDataset: dataset,
+    today: () => today,
+    fetchImpl: async (url) => {
+      calls.push(String(url));
+      if (String(url).includes('search.12306.cn'))
+        return response({
+          data: [
+            {
+              station_train_code: 'G1',
+              train_no: 'test-G1',
+              from_station: train.stops[0],
+              to_station: train.stops.at(-1),
+            },
+          ],
+        });
+      if (String(url).includes('queryByTrainNo'))
+        return response({
+          data: {
+            data: train.stops.map((name, i) => ({
+              station_name: name,
+              arrive_time: `${String(i + 7).padStart(2, '0')}:00`,
+              start_time: `${String(i + 7).padStart(2, '0')}:05`,
+            })),
+          },
+        });
+      throw new Error('unexpected source');
+    },
+  });
+  const request = {
+    mode: 'train',
+    number: 'G1',
+    date: '2026-10-02',
+    from: '德州东',
+    to: '南京南',
+    provider: 'osm-local',
+  };
+  const result = await api('/api/route', request);
+  assert.equal(result.data.quality, 'corridor');
+  assert.equal(result.data.requiresConfirmation, true);
+  assert.equal(result.data.routeDataVersion, dataset.dataVersion);
+  assert.equal(result.data.routeProvider, 'osm-local');
+  assert.equal(result.data.scheduleProvenance.source, '12306');
+  assert.equal(result.data.routeEvidence.geometry.relationId, 356778);
+  today = '2026-11-02';
+  const expired = await api('/api/route', request);
+  assert.equal(expired.data.quality, 'station-schematic');
+  assert.equal(expired.data.requiresConfirmation, true);
+  assert.equal(expired.data.routeProvider, 'osm-local');
+  assert.equal(expired.data.routeEvidence, undefined);
+  assert.match(
+    (await api('/api/capabilities')).data.railProviders.find(
+      (entry) => entry.id === 'osm-local',
+    ).coverage,
+    /已到期/,
+  );
+  assert.ok(
+    calls.every(
+      (url) => !url.includes('railgo') && !url.includes('zenglingkun'),
+    ),
+  );
 });
 
 test('G813 共线白名单继续优先使用经核验的 G1 区间', async (t) => {

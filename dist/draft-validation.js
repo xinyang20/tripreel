@@ -17,6 +17,16 @@ function nested(value, depth = 0) {
   if (!value || typeof value !== 'object') return;
   for (const [key, entry] of Object.entries(value)) {
     if (entry == null) continue;
+    if (
+      key === 'providerDataVersion' &&
+      (typeof entry !== 'string' || !entry.trim() || entry.length > 200)
+    )
+      fail('铁路数据版本无效');
+    if (
+      ['provider', 'railProvider', 'routeProvider'].includes(key) &&
+      !['railgo', 'osm-local'].includes(entry)
+    )
+      fail('铁路来源无效');
     if (key === 'fieldSources') {
       if (!object(entry)) fail('字段来源结构无效');
       for (const source of Object.values(entry)) {

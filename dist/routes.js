@@ -5,6 +5,11 @@ import {
   updateStoredRoute,
   recordRouteAttempt,
 } from './store.js';
+import {
+  originalRailProvider,
+  preferredRailProvider,
+  railProviderChoices,
+} from './rail-providers.js';
 let running = false,
   reportTimer,
   controller;
@@ -51,7 +56,20 @@ export function cancelRouteRefresh() {
 }
 export async function refreshStoredRoutes({ force = false } = {}) {
   if (running || !state.ready || state.locked || $('editor')?.open) return;
-  if (!force && state.capabilities?.railgoEnabled === false) return;
+  if (
+    !preferredRailProvider(state.capabilities, state.preferences?.railProvider)
+  ) {
+    if (force)
+      report('本站线路查询能力尚未确认，已保留原线路。请刷新页面重试。');
+    return;
+  }
+  if (
+    !force &&
+    !(
+      state.capabilities?.autoRefreshRoutes ?? state.capabilities?.railgoEnabled
+    )
+  )
+    return;
   if (force) attempted.clear();
   const pending = state.saved.filter(
     (trip) =>
@@ -59,6 +77,17 @@ export async function refreshStoredRoutes({ force = false } = {}) {
       !trip.routeFrozen &&
       trip.from?.name &&
       trip.to?.name &&
+      (force ||
+        railProviderChoices(state.capabilities).some(
+          (source) =>
+            source.autoRefresh !== false &&
+            source.id ===
+              (originalRailProvider(trip) ||
+                preferredRailProvider(
+                  state.capabilities,
+                  state.preferences?.railProvider,
+                )),
+        )) &&
       !attempted.has(`${trip.id}:${trip.revision}`) &&
       (force ||
         trip.routePolicy !== 'latest-v2' ||
@@ -84,6 +113,16 @@ export async function refreshStoredRoutes({ force = false } = {}) {
           '/api/route',
           {
             mode: 'train',
+            provider: force
+              ? preferredRailProvider(
+                  state.capabilities,
+                  state.preferences?.railProvider,
+                )
+              : originalRailProvider(trip) ||
+                preferredRailProvider(
+                  state.capabilities,
+                  state.preferences?.railProvider,
+                ),
             number: trip.number,
             date:
               trip.queryDate || trip.travelDate || trip.departure?.slice(0, 10),

@@ -214,6 +214,22 @@ test('浏览器不支持MP4时实际编码并预览WebM', async ({ page }) => {
 });
 
 for (const resolution of [720, 1080]) {
+  test(`${resolution}p 以 1× 实际编码、预览并释放资源`, async ({ page }) => {
+    await openVideo(page, 1, '1');
+    await page.locator('#video-resolution').selectOption(String(resolution));
+    const { download, metadata } = await completedVideo(
+      page,
+      undefined,
+      resolution,
+    );
+    expect(metadata.expectedSeconds).toBe(26);
+    expect(download.suggestedFilename()).toMatch(/\.mp4$/);
+    expect(
+      await page.evaluate(() => window.videoTest.capturedTypes[0]),
+    ).toMatch(/^video\/mp4/);
+    await page.locator('#video-close').click();
+    await resourcesReleased(page);
+  });
   test(`${resolution}p 视频片头、当前段和片尾的地名避开标题与底栏`, async ({
     page,
   }) => {
@@ -240,7 +256,7 @@ for (const resolution of [720, 1080]) {
           if (String(value).startsWith('• ')) frame.labels.push(frame.box);
           if (value === '旅程即将开始') frame.phase = 'opening';
           if (String(value).startsWith('旅程已抵达')) frame.phase = 'closing';
-          if (String(value).startsWith('线路 RailGo'))
+          if (String(value).includes('Natural Earth'))
             window.videoLabelFrames.push({
               phase: frame.phase,
               labels: frame.labels,

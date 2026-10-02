@@ -252,6 +252,10 @@
             >出行日期<input name="date" id="trip-date" type="date" required
           /></label>
         </div>
+        <div id="single-provider-field">
+          <label>本次线路来源<select id="trip-provider"></select></label>
+          <p id="trip-provider-hint" class="field-hint"></p>
+        </div>
         <button type="button" id="lookup" class="secondary wide">
           自动查询停站与时刻
         </button>
@@ -359,6 +363,8 @@
         role="tabpanel"
         aria-labelledby="batch-tab"
       >
+        <label>本批火车线路来源<select id="batch-provider"></select></label>
+        <p id="batch-provider-hint" class="field-hint"></p>
         <details id="batch-input" open>
           <summary>行程文本 · 修改后重新匹配</summary>
           <p>每行一段，写出你知道的信息，其余自动匹配。</p>
@@ -420,6 +426,17 @@
         <h2 id="about-title">数据与说明</h2>
         <button class="close" data-close="about" aria-label="关闭">×</button>
       </div>
+      <section class="data-actions" aria-label="线路来源设置">
+        <h3>线路来源</h3>
+        <label
+          >新查询的默认来源<select id="default-rail-provider"></select
+        ></label>
+        <p id="default-provider-hint" class="field-hint"></p>
+        <p class="field-hint">
+          偏好保存在本浏览器，可在单次或整批查询时临时切换。更换偏好不会改写已有线路。
+        </p>
+        <p id="provider-status" class="field-hint" role="status"></p>
+      </section>
       <section class="data-actions" aria-label="备份与恢复">
         <h3>我的本地数据</h3>
         <p id="backup-date" class="field-hint">尚未导出备份</p>
@@ -473,6 +490,20 @@
           <b>火车：</b>12306 公开网页服务提供停站和计划时刻；RailGo
           提供按车次整理的铁路线路坐标，默认采用最新可用线路并截取完整乘坐区间；停站表和时刻差异不会清空轨迹。RailGo
           线路未区分日期，可能与当日实际调度不同。个别中间站无法匹配时保留整条曲线，最新线路本身不可用时保留旧线；有可靠停站的可确认采用“停站连线示意”，也可保存为待补全。
+        </p>
+        <p>
+          <b>OSM 线路参考：</b
+          >只提供已核实车次与区间，覆盖范围见来源选择提示；需预览确认，不代表乘车当日的真实轨迹。参考轨道归属
+          © OpenStreetMap contributors，按
+          <a
+            href="https://opendatacommons.org/licenses/odbl/1-0/"
+            target="_blank"
+            rel="noreferrer"
+            >ODbL 1.0</a
+          >
+          提供，可<a href="/data/rail-corridors.json" download
+            >下载本站参考轨道数据</a
+          >。
         </p>
         <p>
           <b>飞机：</b

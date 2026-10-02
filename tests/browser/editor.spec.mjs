@@ -34,6 +34,7 @@ const schematic = {
   ],
   routeCoordinates: [start.coord, end.coord],
   quality: 'station-schematic',
+  routeProvider: 'railgo',
   distance: 800,
   requiresConfirmation: true,
   resolution: { state: 'needs-confirmation', requiresConfirmation: true },
@@ -288,4 +289,5 @@ test('批量明确接受示意后仅改时刻，刷新恢复草稿仍保留确�
   expect(stored.routeState).toBe('ready');
   expect(stored.routeConfirmed).toBe(true);
   expect(stored.routeCandidate).toBeNull();
+  expect(stored.routeProvider).toBe('railgo');
 });

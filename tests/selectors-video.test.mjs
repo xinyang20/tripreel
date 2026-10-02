@@ -62,6 +62,12 @@ test('筛选按交集生效，待补全可被日期搜索且未知距离不记�
     selectedScope([trip, pending], new Set(['b', 'invisible'])),
     [pending],
   );
+  const groups = new Map([['g1', '春节旅行']]);
+  assert.equal(
+    filterTrips([trip, pending], { search: '春节' }, groups)[0],
+    trip,
+  );
+  assert.equal('groupName' in trip, false);
 });
 test('视频预算跟随范围和速度，超限不可启动，建议倍速满足两分钟', () => {
   const trips = Array.from({ length: 100 }, (_, i) => ({

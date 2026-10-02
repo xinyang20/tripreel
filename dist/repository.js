@@ -7,12 +7,83 @@ import {
   canRenderRoute,
   routeQualityRank,
   ROUTE_FIELDS,
+  actualTravelDate,
 } from './domain.js';
 import { validateDraft } from './draft-validation.js';
+import { parseTime } from './core.js';
+import { measureStage } from './performance.js';
 
 export const LEGACY_KEY = 'travel-trace.v1';
 const STORES = ['meta', 'trips', 'routes', 'drafts', 'groups', 'rescue'];
 const MAX_BACKUP_BYTES = 30 * 1024 * 1024;
+const IDENTITY_INDEX_KEY = 'trip-identities';
+const IDENTITY_FIELDS = [
+  'id',
+  'mode',
+  'number',
+  'travelDate',
+  'departure',
+  'arrival',
+  'from',
+  'to',
+  'groupId',
+  'revision',
+];
+function identityRecord(trip) {
+  return {
+    id: trip.id,
+    mode: trip.mode,
+    number: trip.number,
+    travelDate: actualTravelDate(trip),
+    departure: trip.departure || null,
+    arrival: trip.arrival || null,
+    from: trip.from?.name || '',
+    to: trip.to?.name || '',
+    groupId: trip.groupId ?? null,
+    revision: trip.revision,
+  };
+}
+function validIdentityIndex(index, revision, count) {
+  if (
+    index?.schemaVersion !== 1 ||
+    index.datasetRevision !== revision ||
+    !Array.isArray(index.entries) ||
+    index.entries.length !== count
+  )
+    return false;
+  const seen = new Set();
+  return index.entries.every((entry) => {
+    if (
+      !entry ||
+      Object.keys(entry).length !== IDENTITY_FIELDS.length ||
+      Object.keys(entry).some((key) => !IDENTITY_FIELDS.includes(key)) ||
+      typeof entry.id !== 'string' ||
+      !entry.id ||
+      seen.has(entry.id) ||
+      !['train', 'flight'].includes(entry.mode) ||
+      !['number', 'travelDate', 'from', 'to'].every(
+        (field) => typeof entry[field] === 'string',
+      ) ||
+      !['departure', 'arrival', 'groupId'].every(
+        (field) => entry[field] === null || typeof entry[field] === 'string',
+      ) ||
+      !Number.isInteger(entry.revision) ||
+      entry.revision < 0
+    )
+      return false;
+    try {
+      validateRecord(
+        { ...entry, from: { name: entry.from }, to: { name: entry.to } },
+        [],
+        { allowDateMismatch: true },
+      );
+    } catch {
+      return false;
+    }
+    seen.add(entry.id);
+    return true;
+  });
+}
 const clone = (value) => structuredClone(value);
 const request = (p) =>
   new Promise((resolve, reject) => {
@@ -84,9 +155,7 @@ function checkSet(
   for (const trip of trips) {
     const changed = changedIds.has(trip.id),
       key = journeyKey(trip);
-    validateRecord(trip, changed ? trips : [], {
-      allowDateMismatch: allowDateMismatch || !changed,
-    });
+    if (changed) validateRecord(trip, [], { allowDateMismatch });
     if (
       ids.has(trip.id) ||
       (keys.has(key) && (changed || changedIds.has(keys.get(key))))
@@ -95,9 +164,28 @@ function checkSet(
     ids.add(trip.id);
     if (!keys.has(key) || changed) keys.set(key, trip.id);
   }
+  const intervals = trips
+    .map((trip) => ({
+      trip,
+      start: parseTime(trip.departure),
+      end: parseTime(trip.arrival),
+    }))
+    .filter(({ start, end }) => Number.isFinite(start) && Number.isFinite(end))
+    .sort((a, b) => a.start - b.start);
+  let latest = null,
+    latestChanged = null;
+  for (const interval of intervals) {
+    const changed = changedIds.has(interval.trip.id);
+    const overlapping = changed ? latest : latestChanged;
+    if (overlapping && overlapping.end > interval.start)
+      throw new Error(`与 ${overlapping.trip.number} 的行程时间重叠。`);
+    if (!latest || interval.end > latest.end) latest = interval;
+    if (changed && (!latestChanged || interval.end > latestChanged.end))
+      latestChanged = interval;
+  }
 }
 function split(trip) {
-  const base = clone(trip),
+  const base = { ...trip },
     route = {
       id: trip.id,
       data: extractRoute(trip),
@@ -107,16 +195,18 @@ function split(trip) {
   for (const key of ROUTE_FIELDS)
     if (!['from', 'to', 'via'].includes(key)) delete base[key];
   delete base.routeHistory;
-  return { base, route };
+  return { base: clone(base), route };
 }
 function hydrate(base, route) {
-  return normalizeTrip({
-    ...base,
-    ...(route?.data || {}),
-    revision: base.revision,
-    routeRevision: route?.revision || 0,
-    routeHistory: route?.history || [],
-  });
+  return measureStage('hydrate', () =>
+    normalizeTrip({
+      ...base,
+      ...(route?.data || {}),
+      revision: base.revision,
+      routeRevision: route?.revision || 0,
+      routeHistory: route?.history || [],
+    }),
+  );
 }
 function routeChanged(a, b) {
   return JSON.stringify(extractRoute(a)) !== JSON.stringify(extractRoute(b));
@@ -179,6 +269,15 @@ function archive(current) {
 function assignRoute(current, route) {
   const result = {
     ...current,
+    // Provenance belongs to the incoming geometry. Old history and providers
+    // that omit these fields must not inherit another source's evidence.
+    routeProvider: undefined,
+    routeDataVersion: null,
+    routeEvidence: null,
+    routeSource: null,
+    routeSourceUrl: null,
+    routeNote: null,
+    routeFetchedAt: null,
     ...extractRoute(route),
     routeState: undefined,
     routeCandidate: null,
@@ -215,9 +314,12 @@ export function createRepository({
     opening,
     channel,
     closed = false;
-  const subscribers = new Set();
-  const publish = (revision, kind = 'records') =>
-    channel?.postMessage({ revision, kind });
+  const subscribers = new Set(),
+    commitSubscribers = new Set();
+  async function publish(change) {
+    channel?.postMessage(change);
+    await Promise.all([...commitSubscribers].map((fn) => fn(change)));
+  }
   async function open() {
     if (closed) throw new Error('存储连接已关闭，请刷新页面。');
     if (db) return db;
@@ -287,9 +389,34 @@ export function createRepository({
         );
       tx.onerror = () => {};
     });
+    const changes = Object.fromEntries(STORES.map((name) => [name, new Set()]));
+    const identityChanges = new Map();
     const stores = Object.fromEntries(
-      STORES.map((name) => [name, tx.objectStore(name)]),
+      STORES.map((name) => {
+        const original = tx.objectStore(name);
+        return [
+          name,
+          {
+            get: (key) => original.get(key),
+            getAll: () => original.getAll(),
+            count: () => original.count(),
+            put(value) {
+              changes[name].add(value.id);
+              if (name === 'trips')
+                identityChanges.set(value.id, identityRecord(value));
+              return original.put(value);
+            },
+            delete(key) {
+              changes[name].add(key);
+              if (name === 'trips') identityChanges.set(key, null);
+              return original.delete(key);
+            },
+          },
+        ];
+      }),
     );
+    stores.changes = changes;
+    stores.identityChanges = identityChanges;
     try {
       result = await work(stores);
       if (signal?.aborted) {
@@ -323,10 +450,71 @@ export function createRepository({
     await request(stores.trips.put(base));
     await request(stores.routes.put(route));
   }
+  async function persistIdentityIndex(stores, revision) {
+    for (const [id, entry] of stores.identityChanges) {
+      if (entry) stores.identityIndex.set(id, entry);
+      else stores.identityIndex.delete(id);
+    }
+    await request(
+      stores.meta.put({
+        id: IDENTITY_INDEX_KEY,
+        schemaVersion: 1,
+        datasetRevision: revision,
+        entries: [...stores.identityIndex.values()],
+      }),
+    );
+  }
+  async function rebuildIdentityIndex(stores, revision) {
+    // Old v2 pages do not maintain this optional meta record. Their dataset
+    // revision makes it stale; rebuild once inside the same write transaction.
+    const bases = await request(stores.trips.getAll());
+    stores.identityIndex = new Map(
+      bases.map((trip) => [trip.id, identityRecord(trip)]),
+    );
+    await persistIdentityIndex(stores, revision);
+    return stores.identityIndex;
+  }
+  async function identityIndex(stores, meta) {
+    if (stores.identityIndex) return stores.identityIndex;
+    meta ||= await request(stores.meta.get('dataset'));
+    const [index, count] = await Promise.all([
+      request(stores.meta.get(IDENTITY_INDEX_KEY)),
+      request(stores.trips.count()),
+    ]);
+    if (!validIdentityIndex(index, meta.revision, count))
+      return rebuildIdentityIndex(stores, meta.revision);
+    stores.identityIndex = new Map(
+      index.entries.map((entry) => [entry.id, entry]),
+    );
+    return stores.identityIndex;
+  }
+  async function indexedBases(stores, ids) {
+    let index = await identityIndex(stores);
+    const bases = new Map(
+      await Promise.all(
+        [...new Set(ids)].map(async (id) => [
+          id,
+          await request(stores.trips.get(id)),
+        ]),
+      ),
+    );
+    if (
+      [...bases].some(
+        ([id, base]) =>
+          JSON.stringify(base ? identityRecord(base) : null) !==
+          JSON.stringify(index.get(id) || null),
+      )
+    ) {
+      const meta = await request(stores.meta.get('dataset'));
+      index = await rebuildIdentityIndex(stores, meta.revision);
+    }
+    return { map: new Map(index), bases };
+  }
   async function bump(stores) {
     const meta = await request(stores.meta.get('dataset'));
     meta.revision++;
     await request(stores.meta.put(meta));
+    await persistIdentityIndex(stores, meta.revision);
     return meta.revision;
   }
   async function writable(stores) {
@@ -400,6 +588,7 @@ export function createRepository({
         }
       }
       await request(stores.meta.put(meta));
+      await identityIndex(stores, meta);
     });
     if (broadcast && !channel && globalThis.BroadcastChannel) {
       channel = new BroadcastChannel(`${dbName}:changes`);
@@ -409,47 +598,152 @@ export function createRepository({
     }
     return snapshot();
   }
+  async function readSnapshot(stores) {
+    const [meta, trips, groups, drafts, items] = await Promise.all([
+      request(stores.meta.get('dataset')),
+      getAll(stores),
+      request(stores.groups.getAll()),
+      request(stores.drafts.getAll()),
+      request(stores.rescue.getAll()),
+    ]);
+    let legacyChanged = false;
+    try {
+      legacyChanged =
+        (legacyStorage?.getItem(LEGACY_KEY) ?? null) !== meta?.legacyRaw;
+    } catch {}
+    return {
+      trips,
+      groups,
+      drafts,
+      datasetRevision: meta?.revision || 0,
+      recovery: {
+        items,
+        rawLegacy: meta?.legacyRaw ?? null,
+        error: meta?.error || null,
+        legacyChanged,
+      },
+      locked: Boolean(meta?.error),
+    };
+  }
   async function snapshot() {
+    return run('readonly', readSnapshot);
+  }
+  // A change describes exactly one committed transaction. Any missing revision,
+  // old sender, or subsequent commit requires a consistent complete snapshot.
+  async function readChanges(change, expectedRevision) {
     return run('readonly', async (stores) => {
-      const [meta, trips, groups, drafts, items] = await Promise.all([
-        request(stores.meta.get('dataset')),
-        getAll(stores),
-        request(stores.groups.getAll()),
-        request(stores.drafts.getAll()),
-        request(stores.rescue.getAll()),
-      ]);
-      let legacyChanged = false;
-      try {
-        legacyChanged =
-          (legacyStorage?.getItem(LEGACY_KEY) ?? null) !== meta?.legacyRaw;
-      } catch {}
+      const meta = await request(stores.meta.get('dataset'));
+      if (
+        !change ||
+        change.full ||
+        !Number.isInteger(change.fromRevision) ||
+        change.fromRevision !== expectedRevision ||
+        change.revision !== expectedRevision + 1 ||
+        meta?.revision !== change.revision ||
+        !Array.isArray(change.changedTripIds)
+      )
+        return readSnapshot(stores);
+      const trips = [],
+        removedTripIds = [];
+      await Promise.all(
+        change.changedTripIds.map(async (id) => {
+          const [base, route] = await Promise.all([
+            request(stores.trips.get(id)),
+            request(stores.routes.get(id)),
+          ]);
+          if (base) trips.push(hydrate(base, route));
+          else removedTripIds.push(id);
+        }),
+      );
       return {
-        trips,
-        groups,
-        drafts,
-        datasetRevision: meta?.revision || 0,
-        recovery: {
-          items,
-          rawLegacy: meta?.legacyRaw ?? null,
-          error: meta?.error || null,
-          legacyChanged,
-        },
-        locked: Boolean(meta?.error),
+        partial: true,
+        trips: sorted(trips),
+        removedTripIds,
+        datasetRevision: meta.revision,
+        ...(change.groupsChanged
+          ? { groups: await request(stores.groups.getAll()) }
+          : {}),
+        ...(change.draftsChanged
+          ? { drafts: await request(stores.drafts.getAll()) }
+          : {}),
+        kind: change.kind,
       };
     });
+  }
+  async function readTrips(ids) {
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string'))
+      throw new Error('行程标识列表无效。');
+    return run('readonly', async (stores) => {
+      const trips = await Promise.all(
+        [...new Set(ids)].map(async (id) => {
+          const [base, route] = await Promise.all([
+            request(stores.trips.get(id)),
+            request(stores.routes.get(id)),
+          ]);
+          return base ? hydrate(base, route) : null;
+        }),
+      );
+      return sorted(trips.filter(Boolean));
+    });
+  }
+  async function loadPreferences() {
+    return run('readonly', async (stores) => {
+      const preferences = await request(stores.meta.get('preferences'));
+      return {
+        railProvider:
+          preferences?.railProvider === 'osm-local' ? 'osm-local' : 'railgo',
+      };
+    });
+  }
+  async function savePreferences(patch) {
+    if (
+      !patch ||
+      typeof patch !== 'object' ||
+      Array.isArray(patch) ||
+      Object.keys(patch).some((key) => key !== 'railProvider') ||
+      (patch.railProvider !== undefined &&
+        !['railgo', 'osm-local'].includes(patch.railProvider))
+    )
+      throw new Error('线路来源设置无效。');
+    const preferences = await run('readwrite', async (stores) => {
+      const current = await request(stores.meta.get('preferences'));
+      const value = {
+        railProvider:
+          patch.railProvider ||
+          (current?.railProvider === 'osm-local' ? 'osm-local' : 'railgo'),
+      };
+      await request(stores.meta.put({ id: 'preferences', ...value }));
+      return value;
+    });
+    await publish({ kind: 'preferences' });
+    return preferences;
   }
   async function mutate(work, options) {
     const result = await run(
       'readwrite',
       async (stores) => {
-        await writable(stores);
+        const meta = await writable(stores);
+        await identityIndex(stores, meta);
         const value = await work(stores);
         const revision = value === false ? null : await bump(stores);
-        return { value, revision };
+        const changes = stores.changes;
+        return {
+          value,
+          revision,
+          change: {
+            fromRevision: meta.revision,
+            revision,
+            kind: options?.kind || 'records',
+            changedTripIds: [...new Set([...changes.trips, ...changes.routes])],
+            groupsChanged: changes.groups.size > 0,
+            draftsChanged: changes.drafts.size > 0,
+            full: changes.rescue.size > 0,
+          },
+        };
       },
       options,
     );
-    if (result.revision !== null) publish(result.revision, options?.kind);
+    if (result.revision !== null) await publish(result.change);
     return result.value;
   }
   async function saveTrips(inputs, { draftId, draftRevision, signal } = {}) {
@@ -461,14 +755,19 @@ export function createRepository({
     });
     return mutate(
       async (stores) => {
-        const all = await getAll(stores),
-          map = new Map(all.map((t) => [t.id, t])),
+        const { map, bases } = await indexedBases(
+            stores,
+            prepared.map((trip) => trip.id),
+          ),
           seen = new Set(),
           saved = [];
         for (const incoming of prepared) {
           if (seen.has(incoming.id)) throw new Error('本批记录包含重复标识。');
           seen.add(incoming.id);
-          const current = map.get(incoming.id);
+          const base = bases.get(incoming.id);
+          const current = base
+            ? hydrate(base, await request(stores.routes.get(incoming.id)))
+            : null;
           assertRevision(current, incoming.revision);
           if (
             incoming.groupId &&
@@ -581,14 +880,49 @@ export function createRepository({
       const group = await request(stores.groups.get(id));
       if (!group) throw conflict('分组已删除。');
       assertRevision(group, revision, '分组');
-      for (const trip of await getAll(stores))
-        if (trip.groupId === id)
-          await write(stores, {
-            ...trip,
-            groupId: null,
-            revision: trip.revision + 1,
-          });
+      for (const entry of (await identityIndex(stores)).values())
+        if (entry.groupId === id) {
+          const trip = await request(stores.trips.get(entry.id));
+          await request(
+            stores.trips.put({
+              ...trip,
+              groupId: null,
+              revision: trip.revision + 1,
+            }),
+          );
+        }
       await request(stores.groups.delete(id));
+      return true;
+    });
+  }
+  async function assignGroup(records, groupId) {
+    if (
+      !Array.isArray(records) ||
+      !records.length ||
+      records.length > 10000 ||
+      (groupId !== null && typeof groupId !== 'string')
+    )
+      throw new Error('分组修改无效。');
+    return mutate(async (stores) => {
+      if (groupId && !(await request(stores.groups.get(groupId))))
+        throw new Error('旅程分组不存在，请重新选择。');
+      const seen = new Set();
+      for (const record of records) {
+        if (typeof record?.id !== 'string' || seen.has(record.id))
+          throw new Error('分组修改包含无效或重复记录。');
+        seen.add(record.id);
+        const current = await request(stores.trips.get(record.id));
+        if (!current) throw conflict('行程已删除。');
+        assertRevision(current, record.revision);
+        await request(
+          stores.trips.put({
+            ...current,
+            groupId: groupId || null,
+            revision: current.revision + 1,
+            updatedAt: new Date().toISOString(),
+          }),
+        );
+      }
       return true;
     });
   }
@@ -641,6 +975,7 @@ export function createRepository({
           return { error: current.lastRouteAttempt };
         }
         const requiresConfirmation = Boolean(
+          route.routeProvider === 'osm-local' ||
           route.requiresConfirmation ||
           route.resolution?.requiresConfirmation ||
           route.resolution?.state === 'needs-confirmation' ||
@@ -649,6 +984,17 @@ export function createRepository({
         const alreadyConfirmed =
           current.quality === resolved.quality &&
           current.routeConfirmed === true &&
+          [
+            'routeProvider',
+            'routeDataVersion',
+            'routeSource',
+            'routeSourceUrl',
+            'routeEvidence',
+          ].every(
+            (field) =>
+              JSON.stringify(current[field] ?? null) ===
+              JSON.stringify(resolved[field] ?? null),
+          ) &&
           JSON.stringify(current.routeCoordinates) ===
             JSON.stringify(resolved.routeCoordinates) &&
           current.stops.map((stop) => stop.name).join('|') ===
@@ -790,6 +1136,10 @@ export function createRepository({
     )
       throw new Error('不支持此备份格式或记录数量。');
     const existing = await snapshot(),
+      existingById = new Map(existing.trips.map((trip) => [trip.id, trip])),
+      existingByJourney = new Map(
+        existing.trips.map((trip) => [journeyKey(trip), trip]),
+      ),
       seen = new Set(),
       entries = data.trips.map((raw, index) => {
         const key = String(index);
@@ -800,8 +1150,8 @@ export function createRepository({
             throw new Error('备份中存在重复行程标识。');
           seen.add(incoming.id);
           const found =
-            existing.trips.find((t) => t.id === incoming.id) ||
-            existing.trips.find((t) => journeyKey(t) === journeyKey(incoming));
+            existingById.get(incoming.id) ||
+            existingByJourney.get(journeyKey(incoming));
           return {
             key,
             kind: found
@@ -881,8 +1231,15 @@ export function createRepository({
       const meta = await request(stores.meta.get('dataset'));
       if (meta.revision !== preview.datasetRevision)
         throw conflict('预览后记录已改变，请重新生成恢复预览。');
-      const all = await getAll(stores),
-        map = new Map(all.map((t) => [t.id, t]));
+      const selectedIds = preview.entries
+        .filter(
+          (entry) =>
+            (selections[entry.key] ||
+              (entry.kind === 'new' ? 'add' : 'skip')) !== 'skip',
+        )
+        .map((entry) => entry.existing?.id || entry.incoming?.id)
+        .filter((id) => typeof id === 'string');
+      const { map, bases } = await indexedBases(stores, selectedIds);
       const saved = [];
       for (const entry of preview.entries) {
         const action =
@@ -892,9 +1249,12 @@ export function createRepository({
           throw new Error('恢复选择无效，请修正问题项。');
         validateRecord(entry.incoming, [], { allowDateMismatch: true });
         const incoming = normalizeTrip(safeData(entry.incoming)),
-          current = entry.existing
-            ? map.get(entry.existing.id)
-            : map.get(incoming.id);
+          base = entry.existing
+            ? bases.get(entry.existing.id)
+            : bases.get(incoming.id);
+        const current = base
+          ? hydrate(base, await request(stores.routes.get(base.id)))
+          : null;
         if (current && action !== 'replace')
           throw conflict('已有记录需明确选择替换。');
         if (!current && action === 'replace')
@@ -976,14 +1336,19 @@ export function createRepository({
       if (saved.length) meta.error = null;
       meta.revision++;
       await request(stores.meta.put(meta));
+      await persistIdentityIndex(stores, meta.revision);
       return { saved: saved.length, revision: meta.revision };
     });
-    publish(result.revision);
+    await publish({ revision: result.revision, kind: 'records', full: true });
     return result;
   }
   return {
     init,
     snapshot,
+    readChanges,
+    readTrips,
+    loadPreferences,
+    savePreferences,
     saveTrips,
     deleteTrip,
     saveDraft,
@@ -991,6 +1356,7 @@ export function createRepository({
     deleteDraft,
     saveGroup,
     deleteGroup,
+    assignGroup,
     updateRoute,
     recordRouteAttempt,
     setRouteFrozen,
@@ -998,6 +1364,10 @@ export function createRepository({
     exportBackup,
     previewRestore,
     applyRestore,
+    subscribeCommits(fn) {
+      commitSubscribers.add(fn);
+      return () => commitSubscribers.delete(fn);
+    },
     subscribe(fn) {
       subscribers.add(fn);
       return () => subscribers.delete(fn);

@@ -1,9 +1,48 @@
-import { canReplay, routeLabel, tripIssues } from './domain.js';
+import {
+  canReplay,
+  isReadOnlyTrip,
+  prepareReadOnlyTrip,
+  routeLabel,
+  tripIssues,
+} from './domain.js';
 import { cityFor } from './map-labels.js';
 import { buildTimeline } from './replay.js';
 export const VIDEO_MAX_SECONDS = 300;
 export const VIDEO_MAX_BYTES = 250 * 1024 * 1024;
 export const VIDEO_SPEEDS = [1, 2, 4, 8, 16, 32];
+const presentationFields = [
+  'id',
+  'mode',
+  'number',
+  'date',
+  'travelDate',
+  'departure',
+  'arrival',
+  'from',
+  'to',
+  'stops',
+  'legs',
+  'routeCoordinates',
+  'routeTiming',
+  'routeRevision',
+  'routeState',
+  'routeConfirmed',
+  'referenceAccepted',
+  'requiresConfirmation',
+  'quality',
+  'distance',
+  'routeSource',
+  'routeProvider',
+  'routeDataVersion',
+  'isReference',
+  'referenceDate',
+  'scheduleWarning',
+  'routeFrozen',
+  'issues',
+  'warningDetails',
+  'warnings',
+  'routeNote',
+];
 export function videoBudget(trips, resolution = 1080, speed = 1) {
   const usable = trips.filter(canReplay),
     seconds = buildTimeline(usable).duration / Number(speed) + 4;
@@ -29,19 +68,35 @@ export function recommendedSpeed(trips) {
     ) || 32
   );
 }
+export function videoSnapshot(trips) {
+  return trips.map((trip) => {
+    // Share only values that crossed our recursive read-only boundary. For
+    // external records, clone recording inputs without archived/candidate paths.
+    const fields = Object.fromEntries(
+      presentationFields
+        .filter((key) => trip[key] !== undefined)
+        .map((key) => [key, trip[key]]),
+    );
+    const snapshot = isReadOnlyTrip(trip) ? fields : structuredClone(fields);
+    if (trip.routeCandidate) snapshot.routeCandidate = {};
+    if (trip.resolution?.requiresConfirmation)
+      snapshot.resolution = { requiresConfirmation: true };
+    return prepareReadOnlyTrip(snapshot);
+  });
+}
 export function videoPresentation(
   trips,
   { hideNumbers = false, citiesOnly = false, cityIndex = {} } = {},
 ) {
-  return trips.filter(canReplay).map((trip) => {
-    const t = structuredClone(trip);
+  return videoSnapshot(trips.filter(canReplay)).map((trip) => {
+    const t = { ...trip, from: { ...trip.from }, to: { ...trip.to } };
     if (hideNumbers) t.number = t.mode === 'train' ? '火车旅程' : '飞机旅程';
     if (citiesOnly)
       for (const key of ['from', 'to'])
         t[key].name =
           cityFor({ ...trip[key], kind: trip.mode }, cityIndex)?.name ||
           (key === 'from' ? '出发城市' : '到达城市');
-    return t;
+    return prepareReadOnlyTrip(t);
   });
 }
 export function videoRouteNote(trip) {

@@ -13,6 +13,12 @@ import { validateRecord } from './domain.js';
 import { resolveBatchDraft } from './batch-resolver.js';
 import { sameJourney, routeRequest, routeKey } from './batch-review.js';
 import {
+  fillRailProviderSelect,
+  preferredRailProvider,
+  railProviderDataVersion,
+  switchRowProvider,
+} from './rail-providers.js';
+import {
   initializeDraft,
   updateDraftField,
   chooseCandidate,
@@ -39,6 +45,7 @@ let rows = [],
   reviewText = '',
   journal = null,
   groupId = null,
+  provider,
   createTrip,
   openEditor;
 export const isBatchBusy = () => running;
@@ -50,6 +57,7 @@ const snapshot = () => ({
   reviewText,
   rows,
   groupId,
+  provider,
   filter: $('batch-filter')?.value || 'all',
 });
 function persist() {
@@ -71,6 +79,45 @@ export function initializeBatch(restored) {
   rows = restored?.rows
     ? structuredClone(restored.rows).map((row) => restoreRouteReview(row))
     : [];
+  provider =
+    preferredRailProvider(
+      state.capabilities,
+      restored?.provider || state.preferences?.railProvider,
+    ) ||
+    restored?.provider ||
+    state.preferences?.railProvider;
+  rows = rows.map((row) => {
+    if (!row.draft || row.draft.mode !== 'train') return row;
+    const previous = row.draft.provider;
+    const allowed =
+      preferredRailProvider(state.capabilities, previous || provider) ||
+      previous ||
+      provider;
+    if (previous && previous !== allowed) {
+      const next = switchRowProvider(
+        row,
+        allowed,
+        railProviderDataVersion(state.capabilities, allowed),
+      );
+      next.warnings = [
+        ...(row.warnings || []),
+        '原线路来源在此部署不可用，请重新查询并核对候选。',
+      ];
+      return next;
+    }
+    row.draft.provider = allowed;
+    return switchRowProvider(
+      row,
+      allowed,
+      railProviderDataVersion(state.capabilities, allowed),
+    );
+  });
+  fillRailProviderSelect(
+    $('batch-provider'),
+    state.capabilities,
+    provider,
+    $('batch-provider-hint'),
+  );
   for (const row of rows) {
     if (row.draft) row.draft = initializeDraft(row.draft);
     row.running = false;
@@ -170,7 +217,7 @@ function renderRow(row) {
     if (hasReferenceFields(draft, row.lookup))
       body.innerHTML += `<label class="batch-accept"><input data-reference type="checkbox" ${row.referenceAccepted ? 'checked' : ''}>我已核对参考日期与时刻</label>`;
     if (needsRouteConfirmation(row.route))
-      body.innerHTML += `<label class="batch-accept"><input data-route-confirm type="checkbox" ${row.routeCandidateAccepted ? 'checked' : ''}>接受此候选示意线路（不是已核实的真实轨道）</label>`;
+      body.innerHTML += `<label class="batch-accept"><input data-route-confirm type="checkbox" ${row.routeCandidateAccepted ? 'checked' : ''}>${row.route?.routeProvider === 'osm-local' && row.route?.quality === 'corridor' ? '接受此 OSM 线路参考（不代表乘车当日实际轨迹）' : '接受此候选示意线路（不是已核实的真实轨道）'}</label>`;
     body.innerHTML += `<details class="batch-coordinates"><summary>调整坐标与途经站</summary><div class="form-row">${field(row, 'fromCoord', '出发地经度,纬度')}${field(row, 'toCoord', '目的地经度,纬度')}</div>${field(row, 'via', '途经站（用顿号分隔）')}</details>`;
   } else
     body.innerHTML += `<textarea data-raw class="batch-raw-edit" aria-label="修正第 ${row.line} 行文本">${esc(row.raw)}</textarea>`;
@@ -211,6 +258,14 @@ function markDuplicate(row) {
 }
 async function prepareRoute(row, token, budget) {
   if (!row.draft?.from || !row.draft?.to || row.candidates?.length) return;
+  Object.assign(
+    row,
+    switchRowProvider(
+      row,
+      row.draft.provider,
+      railProviderDataVersion(state.capabilities, row.draft.provider),
+    ),
+  );
   const key = routeKey(row.draft, row.lookup);
   if (row.route && row.routeKey === key) return;
   if (budget.remaining() <= 0) throw abortError();
@@ -221,7 +276,12 @@ async function prepareRoute(row, token, budget) {
     });
     if (!editorSession.current(token)) return;
     row.route = route;
-    row.routeKey = key;
+    if (
+      route.routeProvider === 'osm-local' &&
+      typeof route.routeDataVersion === 'string'
+    )
+      row.draft.providerDataVersion = route.routeDataVersion;
+    row.routeKey = routeKey(row.draft, row.lookup);
     row.routeError = '';
     row.routeConfirmed =
       !needsRouteConfirmation(route) &&
@@ -232,7 +292,7 @@ async function prepareRoute(row, token, budget) {
       route.resolution?.state === 'unavailable'
         ? '暂未获得可靠线路，可以先保存为待补全。'
         : needsRouteConfirmation(route)
-          ? '可使用停站连线示意；请明确确认后再显示该轨迹。'
+          ? '已取得候选线路；请预览并明确确认后再显示该轨迹。'
           : '线路已匹配，核对后可保存。';
     if (route.routeNote) row.warnings.push(route.routeNote);
     for (const issue of route.issues || route.resolution?.issues || [])
@@ -317,6 +377,14 @@ async function ensurePlaces(signal) {
 }
 async function runMatching(targets) {
   if (running || !targets.length || !visible()) return;
+  if (state.capabilities?.deployment === 'unknown') {
+    status(
+      'batch-status',
+      '尚未确认本站查询能力，已保留输入和草稿，可先保存或稍后重试。',
+      true,
+    );
+    return;
+  }
   const token = editorSession.begin(),
     overall = requestBudget(token.signal, 300000);
   running = true;
@@ -388,7 +456,12 @@ export async function prepareBatchImport(text) {
   if (!journal) newJournal();
   rows = parsed.map((row, index) => ({
     ...row,
-    draft: row.draft ? initializeDraft(row.draft, 'text') : null,
+    draft: row.draft
+      ? initializeDraft(
+          { ...row.draft, ...(row.draft.mode === 'train' ? { provider } : {}) },
+          'text',
+        )
+      : null,
     index,
     included: Boolean(row.draft),
     warnings: [],
@@ -491,6 +564,7 @@ async function confirmBatch() {
 }
 function changeRow(row, key, value) {
   row.draft = updateDraftField(row.draft, key, value);
+  if (key === 'mode' && value === 'train') row.draft.provider = provider;
   row.error = '';
   row.reviewed = false;
   if (routeIdentityFields.includes(key)) {
@@ -515,6 +589,39 @@ function changeRow(row, key, value) {
 }
 export function setupBatchEditor(options) {
   ({ createTrip, openEditor } = options);
+  const changeProvider = () => {
+    cancelBatch();
+    editorSession.cancel();
+    provider =
+      preferredRailProvider(
+        state.capabilities,
+        $('batch-provider').value || provider,
+      ) || provider;
+    rows = rows.map((row) =>
+      switchRowProvider(
+        row,
+        provider,
+        railProviderDataVersion(state.capabilities, provider),
+      ),
+    );
+    fillRailProviderSelect(
+      $('batch-provider'),
+      state.capabilities,
+      provider,
+      $('batch-provider-hint'),
+    );
+    renderAll();
+    persist();
+    if (rows.length)
+      status(
+        'batch-status',
+        '本批线路来源已更换，已保留时刻和地点；请重新匹配未确认的线路。',
+      );
+  };
+  $('batch-provider').onchange = changeProvider;
+  document.addEventListener('rail-capabilities-change', () => {
+    if (visible()) changeProvider();
+  });
   $('save-batch').onclick = () =>
     prepareBatchImport($('batch-text').value).catch((error) => {
       if (visible()) status('batch-status', error.message, true);
@@ -668,7 +775,15 @@ export function setupBatchEditor(options) {
         const parsed = parseBatchLines(row.raw);
         if (parsed.length !== 1) throw new Error('每行只能填写一段行程。');
         Object.assign(row, parsed[0], { line: row.line });
-        row.draft = row.draft ? initializeDraft(row.draft, 'text') : null;
+        row.draft = row.draft
+          ? initializeDraft(
+              {
+                ...row.draft,
+                ...(row.draft.mode === 'train' ? { provider } : {}),
+              },
+              'text',
+            )
+          : null;
         row.included = Boolean(row.draft);
         if (!row.draft) throw new Error(row.error);
       } catch (error) {

@@ -47,6 +47,12 @@ import {
   abortError,
 } from './editor-session.js';
 import { pause } from './map.js';
+import {
+  fillRailProviderSelect,
+  preferredRailProvider,
+  railProviderDataVersion,
+  switchRowProvider,
+} from './rail-providers.js';
 export { prepareBatchImport as importText } from './batch-editor.js';
 
 let single = null,
@@ -109,6 +115,7 @@ export function setMode(value) {
   const radio = document.querySelector(`input[name="mode"][value="${value}"]`);
   if (radio) radio.checked = true;
   $('train-extra').classList.toggle('hidden', value !== 'train');
+  $('single-provider-field').classList.toggle('hidden', value !== 'train');
   $('train-candidates').classList.add('hidden');
   $('lookup').innerHTML =
     value === 'train' ? '自动匹配停站与时刻' : '自动匹配机场与时刻';
@@ -147,6 +154,12 @@ function tabs(batch) {
 function populateSingle() {
   if (!single) return;
   setMode(single.draft.mode);
+  fillRailProviderSelect(
+    $('trip-provider'),
+    state.capabilities,
+    single.draft.provider || state.preferences?.railProvider,
+    $('trip-provider-hint'),
+  );
   for (const [key, id] of Object.entries(ids)) {
     $(id).value = single.draft[key] || '';
     $(id).title = `来源：${fieldSourceLabel(single.draft, key)}`;
@@ -196,7 +209,7 @@ function renderSingleReview() {
   if (hasReferenceFields(single.draft, single.lookup))
     review.innerHTML += `<label class="batch-accept"><input id="single-reference-accept" type="checkbox" ${single.referenceAccepted ? 'checked' : ''}>我已核对参考日期与时刻</label>`;
   if (single.routeIsCandidate && needsRouteConfirmation(single.route))
-    review.innerHTML += `<label class="batch-accept"><input id="single-route-confirm" type="checkbox" ${single.routeCandidateAccepted ? 'checked' : ''}>接受此候选示意线路（不是已核实的真实轨道）</label>`;
+    review.innerHTML += `<label class="batch-accept"><input id="single-route-confirm" type="checkbox" ${single.routeCandidateAccepted ? 'checked' : ''}>${single.route?.routeProvider === 'osm-local' && single.route?.quality === 'corridor' ? '接受此 OSM 线路参考（不代表乘车当日实际轨迹）' : '接受此候选示意线路（不是已核实的真实轨道）'}</label>`;
   review.innerHTML += `<p class="field-hint">${esc(single.message || '地点和日期确认后即可保存；时刻、坐标或路线可稍后补全。')}</p>`;
   renderConflict(review);
   if ($('single-reference-accept'))
@@ -397,6 +410,32 @@ export function openEditor(batch = false, trip, restored) {
           needsResolve: !trip,
         };
     single.draft = initializeDraft(single.draft, trip ? 'legacy' : 'manual');
+    const requestedProvider = single.draft.provider;
+    const allowedProvider =
+      preferredRailProvider(
+        state.capabilities,
+        requestedProvider || state.preferences?.railProvider,
+      ) || requestedProvider;
+    if (
+      requestedProvider &&
+      allowedProvider &&
+      requestedProvider !== allowedProvider
+    ) {
+      single = switchRowProvider(
+        single,
+        allowedProvider,
+        railProviderDataVersion(state.capabilities, allowedProvider),
+      );
+      single.warnings ||= [];
+      single.warnings.push(
+        '原线路来源在此部署不可用，已保留输入；重新查询后须核对新候选。',
+      );
+    } else single.draft.provider = allowedProvider;
+    single = switchRowProvider(
+      single,
+      allowedProvider,
+      railProviderDataVersion(state.capabilities, allowedProvider),
+    );
     if (single.route && !single.routeKey)
       single.routeKey = routeKey(single.draft, single.lookup);
     const createdJournal = new DraftJournal(saveDraft, restored, (error) => {
@@ -419,6 +458,24 @@ function editField(key, value) {
   stopSingle({ flush: false });
   editorSession.cancel();
   single.draft = updateDraftField(single.draft, key, value);
+  if (key === 'mode' && value === 'train') {
+    const provider = preferredRailProvider(
+      state.capabilities,
+      single.draft.provider || state.preferences?.railProvider,
+    );
+    if (provider)
+      single = switchRowProvider(
+        single,
+        provider,
+        railProviderDataVersion(state.capabilities, provider),
+      );
+    fillRailProviderSelect(
+      $('trip-provider'),
+      state.capabilities,
+      single.draft.provider,
+      $('trip-provider-hint'),
+    );
+  }
   for (const field of Object.values(ids))
     $(field).removeAttribute('aria-invalid');
   if (ids[key])
@@ -464,9 +521,15 @@ async function ensurePlaces(signal) {
 async function fetchSingleRoute(token, budget) {
   if (!single.draft.from || !single.draft.to || single.candidates?.length)
     return;
+  if (state.capabilities?.deployment === 'unknown')
+    throw new Error('尚未确认本站线路来源，已保留输入，请稍后重试。');
   if (budget.signal.aborted || budget.remaining() <= 0)
     throw budget.signal.reason || abortError('查询时间已用完。');
-  const key = routeKey(single.draft, single.lookup);
+  single = switchRowProvider(
+    single,
+    single.draft.provider,
+    railProviderDataVersion(state.capabilities, single.draft.provider),
+  );
   try {
     const route = await api(
       '/api/route',
@@ -475,7 +538,12 @@ async function fetchSingleRoute(token, budget) {
     );
     if (!editorSession.current(token)) return;
     single.route = route;
-    single.routeKey = key;
+    if (
+      route.routeProvider === 'osm-local' &&
+      typeof route.routeDataVersion === 'string'
+    )
+      single.draft.providerDataVersion = route.routeDataVersion;
+    single.routeKey = routeKey(single.draft, single.lookup);
     single.routeConfirmed =
       !needsRouteConfirmation(route) &&
       route.resolution?.state !== 'unavailable';
@@ -486,7 +554,7 @@ async function fetchSingleRoute(token, budget) {
       route.resolution?.state === 'unavailable'
         ? '暂未取得可靠路线，可以先保存为待补全。'
         : needsRouteConfirmation(route)
-          ? '已找到停站连线示意；需明确接受后才会显示该轨迹。'
+          ? '已取得候选线路；需预览并明确接受后才会显示该轨迹。'
           : '路线已匹配，请核对后保存。';
     if (route.routeNote) single.warnings.push(route.routeNote);
     for (const warning of route.warnings || []) single.warnings.push(warning);
@@ -523,6 +591,14 @@ async function resolveSingleRoute() {
 }
 async function lookupSingle() {
   if (!single) return;
+  if (state.capabilities?.deployment === 'unknown') {
+    status(
+      'lookup-status',
+      '尚未确认本站查询能力，已保留输入和草稿，可先保存或稍后重试。',
+      true,
+    );
+    return;
+  }
   stopSingle();
   const token = editorSession.begin(),
     budget = requestBudget(token.signal, 150000);
@@ -684,6 +760,39 @@ async function saveSingle(event) {
   }
 }
 setupBatchEditor({ createTrip, openEditor });
+$('trip-provider').onchange = () => {
+  if (!single) return;
+  stopSingle({ flush: false });
+  editorSession.cancel();
+  single = switchRowProvider(
+    single,
+    $('trip-provider').value,
+    railProviderDataVersion(state.capabilities, $('trip-provider').value),
+  );
+  populateSingle();
+  persistSingle();
+};
+document.addEventListener('rail-capabilities-change', () => {
+  if (!single || !isCurrentSingle()) return;
+  const provider = preferredRailProvider(
+    state.capabilities,
+    single.draft.provider || state.preferences?.railProvider,
+  );
+  const next = provider
+    ? switchRowProvider(
+        single,
+        provider,
+        railProviderDataVersion(state.capabilities, provider),
+      )
+    : single;
+  if (next !== single) {
+    stopSingle({ flush: false });
+    editorSession.cancel();
+    single = next;
+    persistSingle();
+  }
+  populateSingle();
+});
 $('lookup').onclick = lookupSingle;
 $('trip-form').onsubmit = saveSingle;
 for (const [key, id] of Object.entries(ids))

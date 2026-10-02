@@ -8,6 +8,7 @@ import {
   latestJourney,
 } from './scripts/rail-geometry.mjs';
 import { queryTrainWithReference } from './scripts/train-reference.mjs';
+import { createOsmRailProvider } from './scripts/rail-osm.mjs';
 import {
   sharedCorridorPlan,
   sharedCorridorReference,
@@ -138,6 +139,7 @@ export async function createTravelServer({
   schedulerOptions = {},
   publicOrigin = null,
   railgoEnabled = publicOrigin === null,
+  osmDataset: inputOsmDataset,
 } = {}) {
   let publicURL = null;
   if (publicOrigin !== null) {
@@ -163,12 +165,41 @@ export async function createTravelServer({
   }
   if (typeof railgoEnabled !== 'boolean')
     throw new TypeError('RailGo 开关必须是布尔值。');
+  // Public deployments cannot re-enable RailGo through an environment override.
+  if (publicURL) railgoEnabled = false;
+  let osmDataset = inputOsmDataset;
+  if (osmDataset === undefined) {
+    try {
+      osmDataset = JSON.parse(
+        await readFile(path.join(root, 'data/rail-corridors.json'), 'utf8'),
+      );
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      osmDataset = null;
+    }
+  }
+  const osmProvider = createOsmRailProvider(osmDataset, { today });
   const capabilities = {
     deployment: publicURL ? 'public' : 'local',
     railgoEnabled,
+    defaultRailProvider: railgoEnabled ? 'railgo' : 'osm-local',
+    autoRefreshRoutes: railgoEnabled,
+    get railProviders() {
+      return [
+        {
+          id: 'railgo',
+          label: 'RailGo（仅本机）',
+          available: railgoEnabled,
+          coverage: '车次最新线路',
+          requiresConfirmation: false,
+          autoRefresh: railgoEnabled,
+        },
+        osmProvider.capability,
+      ];
+    },
     notice: railgoEnabled
       ? ''
-      : '此部署已停用 RailGo 在线轨道查询；火车可使用停站或手动途经点示意，飞机使用示意弧线。',
+      : '此部署已停用 RailGo 在线轨道查询；可选择 OSM 本地线路参考，覆盖以白名单为准，其他火车行程使用停站或手动途经点示意。',
   };
   const stations =
     inputStations ||
@@ -564,6 +595,12 @@ export async function createTravelServer({
     );
   }
   async function resolveRoute(body, context) {
+    const route = await resolveRouteData(body, context);
+    if (body.mode === 'train')
+      route.routeProvider = body.provider || capabilities.defaultRailProvider;
+    return route;
+  }
+  async function resolveRouteData(body, context) {
     if (
       !body ||
       typeof body !== 'object' ||
@@ -600,6 +637,15 @@ export async function createTravelServer({
         return pendingRoute(body, error);
       }
     }
+    const railProvider = body.provider ?? capabilities.defaultRailProvider;
+    if (!['railgo', 'osm-local'].includes(railProvider))
+      throw invalid('线路来源无效，请选择可用的线路来源。');
+    if (railProvider === 'railgo' && !railgoEnabled)
+      throw new TravelError(
+        'RAIL_PROVIDER_DISABLED',
+        '此部署已停用 RailGo，不能代理该来源；请选择 OSM 本地线路参考。',
+        { status: 403, retryable: false },
+      );
     const number = String(body.number || '')
         .trim()
         .toUpperCase(),
@@ -618,7 +664,9 @@ export async function createTravelServer({
         (error) => ({ error }),
       );
     const [railResult, scheduleResult] = await Promise.all([
-      settle(railData('mapLine', number, context)),
+      railProvider === 'railgo'
+        ? settle(railData('mapLine', number, context))
+        : Promise.resolve({ value: null }),
       body.date
         ? settle(
             trainWithReference(
@@ -719,6 +767,20 @@ export async function createTravelServer({
         sameSequence ? body : {},
       );
     };
+    if (railProvider === 'osm-local') {
+      try {
+        return decorateRoute(
+          osmProvider.resolve({ number, selectedSchedule, schedule }),
+          details,
+          schedule,
+        );
+      } catch (error) {
+        if (isCancellation(error)) throw error;
+        routeError = error;
+        if (!railgoEnabled)
+          details.push(warning('RAILGO_DISABLED', capabilities.notice));
+      }
+    }
     if (reference) {
       try {
         const selected = selectReference(reference.stations);

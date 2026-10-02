@@ -1,0 +1,51 @@
+{
+  "id": "jinghu-tianjinnan-nanjingnan",
+  "name": "京沪高铁天津南—南京南",
+  "dataVersion": "jinghu-2026-10-02-r268",
+  "sourceDate": "2026-10-02",
+  "relationId": 356778,
+  "relationVersion": 268,
+  "relationTimestamp": "2026-09-24T22:42:54Z",
+  "trackSeedWay": 878637591,
+  "stationNodeIds": [
+    10589687035, 8927836153, 6214911057, 7733885005, 6844103016, 6193950294,
+    9262897538, 3163707180, 7733885004, 7733885003, 6234311904, 7104703253,
+    7733885002, 2483530943
+  ],
+  "distanceRangeKm": [880, 930],
+  "trains": [
+    {
+      "number": "G1",
+      "stops": [
+        "北京南",
+        "沧州西",
+        "德州东",
+        "曲阜东",
+        "南京南",
+        "苏州北",
+        "上海虹桥"
+      ],
+      "evidence": {
+        "routeUrl": "https://kab.sww.sh.gov.cn/xwzx/001001/20260119/625b851e-c841-4e09-b411-9f8cd4ce44e8.html",
+        "scheduleUrl": "https://kyfw.12306.cn/otn/czxx/queryByTrainNo?train_no=24000000G10L&from_station_telecode=VNP&to_station_telecode=AOH&depart_date=2026-10-02",
+        "checkedDate": "2026-10-02",
+        "scheduleDate": "2026-10-02",
+        "basis": "上海口岸办2026-01-19发布的铁路调图报道将G32/G1列为京沪高铁大站标杆列车；当日12306完整停站独立核对。仅提供站序不变且位于天津南—南京南界内的乘坐区间参考，不推断历史当日股道。",
+        "validFrom": "2026-10-02",
+        "validUntil": "2026-11-01"
+      }
+    }
+  ],
+  "audit": {
+    "notEnabled": [
+      {
+        "number": "G813",
+        "reason": "2026-10-02已通过12306独立核对停站，但尚未取得可留存的独立车次全区间径路依据，未启用OSM白名单。"
+      }
+    ],
+    "geometrySourceURL": "https://www.openstreetmap.org/api/0.6/relation/356778/full.json",
+    "sourceFile": "jinghu-356778.osm",
+    "limitations": "轨道与列车资料分别核验；G1当前不停天津南，不允许据线路经过推断停靠。换号、停站变化或越界均降为示意。",
+    "scheduleSourceFile": "g1-stops-2026-10-02.json"
+  }
+}
