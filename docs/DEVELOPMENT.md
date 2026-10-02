@@ -21,7 +21,7 @@
 
 服务固定监听 `127.0.0.1:4173`，没有地址或端口环境变量。修改浏览器模块后刷新即可；修改 `server.mjs` 或其导入的共享模块后需要重启。在启动终端按 `Ctrl+C` 停止。开发验证不应占用或改写用户正在使用的页面和浏览器数据。
 
-受限公开模式使用 `TRIPREEL_PUBLIC_ORIGIN=https://tripreel.xinyang20.cn` 和 `TRIPREEL_RAILGO=disabled`，不改变监听地址。公开来源用于限定允许的 Host/Origin；不能通过任意 `X-Forwarded-Host` 或用户请求动态扩大允许列表。反向代理需保留公开 Host 与浏览器 Origin，RailGo 禁用时所有在线轨道及主数据分支都应跳过，停站示意改用允许的 12306 结果。环境变量变更后需重启进程，完整配置见 [部署说明](DEPLOYMENT.md)。
+受限公开模式使用 `TRIPREEL_PUBLIC_ORIGIN=https://tripreel.xinyang20.cn` 和 `TRIPREEL_RAILGO=disabled`，不改变监听地址。公开来源用于限定允许的 Host/Origin；不能通过任意 `X-Forwarded-Host` 或用户请求动态扩大允许列表。反向代理需保留公开 Host 与浏览器 Origin，服务端强制禁止全部 RailGo 在线轨道及主数据分支。默认读取 OSM 本地白名单，未覆盖时使用允许的 12306 停站示意，不回退 RailGo。环境变量变更后需重启进程，完整配置见 [部署说明](DEPLOYMENT.md)。
 
 ## 目录与模块
 
@@ -41,38 +41,56 @@ tripreel/
 └── 启动途映.command          macOS 启动入口
 ```
 
-下表中的前端模块均位于 `dist/`：
+未标路径的前端模块位于 `dist/`，服务端和维护脚本另行注明：
 
 | 模块                                                       | 职责                                                         |
 | ---------------------------------------------------------- | ------------------------------------------------------------ |
 | `app.js` / `index.html` / `styles.css`                     | 页面初始化、行程列表、交互和可选 WebMCP 工具                 |
+| `controls.css`                                             | 原生表单控件、选中标识、焦点和展开菜单的共享样式             |
 | `domain.js` / `repository.js` / `store.js`                 | 统一实际日期与行程身份、记录可用性、事务存储、迁移和页面状态 |
 | `editor*.js` / `batch-*.js`                                | 单段及批量会话、草稿、匹配、字段来源与主线／候选确认         |
 | `draft-validation.js`                                      | 恢复及继续草稿前的结构校验，允许未完成输入                   |
 | `selectors.js` / `library-ui.js`                           | 统一筛选范围、旅程、备份预览及详情                           |
 | `routes.js`                                                | 后台线路刷新及版本保护，不修改用户时刻                       |
+| `rail-providers.js`                                        | 来源能力、默认／临时选择、版本及草稿查询缓存约束             |
+| `performance.js`                                           | 显式启用的有界分段计时                                       |
 | `map*.js` / `camera-fit.js` / `replay.js`                  | 共享几何、地名、取景、自由视角和回放                         |
 | `video-options.js` / `video-export.js` / `video-layout.js` | 导出范围、预算、隐私呈现、编码、遮挡避让与资源释放           |
 | `server.mjs` / `scripts/request-scheduler.mjs`             | 固定来源查询、预算、共享请求、取消、缓存及队列               |
 | `scripts/rail-*.mjs` / `scripts/train-reference.mjs`       | 铁路几何与区间校验、停站示意及参考日期                       |
+| `scripts/import-rail-osm.mjs` / `scripts/rail-data/`       | OSM 原始关系、独立证据清单与显式离线导入                     |
+
+`controls.css` 在布局样式之后加载，覆盖静态及动态生成的原生控件。下拉框用 `appearance: base-select` 渐进增强展开菜单与选中标识，保留浏览器的键盘、表单及可访问性语义；不支持此能力的浏览器保留统一的闭合外观和系统选项菜单，参见 [MDN 可定制下拉框](https://developer.mozilla.org/en-US/docs/Learn_web_development/Extensions/Forms/Customizable_select)。日期、时间、地点建议和视频播放仍使用浏览器原有交互。维护时同时检查禁用、错误、键盘焦点、窄屏及强制颜色模式，基础输入样式用低特异性选择器，避免覆盖状态反馈。
 
 数据库仍使用 `travel-trace` v2，旧数据键 `travel-trace.v1` 和备份标识属于兼容性约定，不随品牌改名。正式记录、路线、草稿、分组和救援内容分别存储。所有页面存储操作经异步 `store.js` 调用，必须等待成功再关闭确认界面；并发版本检查在事务内执行。
+
+`repository.subscribeCommits` 在提交成功后提供数据版本和受影响 ID，`readChanges` / `readTrips` 定向读取；store 按 ID 合并并复用未变记录与几何引用。通知乱序、版本缺口、旧格式或读取时版本已经前进时使用完整快照恢复。保存时仍在事务内以全部轻量身份和时间字段校验冲突，仅加载受影响记录的完整路线；首次读取仍包含全部历史，没有实现历史按需加载。`assignGroup` 使用仅元数据事务。默认来源由异步 `loadPreferences` / `savePreferences` 写入独立 meta 项，不提升行程数据版本或重绘地图。
+
+轻量索引保存在 v2 的 `meta/trip-identities`，只包含身份、时间、分组等标量，随记录和 `datasetRevision` 原子提交。正常保存不读取其他记录的主线、历史或候选几何。旧 v2 库首次写入、旧页面写入造成的版本变化、索引缺失或损坏会在事务中重新建立索引；数据库版本及原有路线存储格式不变。
+
+`rail-providers.js` 负责服务器能力约束与默认/临时来源选择；`performance.js` 仅在显式设置 `globalThis.__tripreelPerformance` 时记录有界分段耗时。列表按 ID 复用卡片，筛选状态立即更新、DOM 按帧合并；几何与时间线签名分开。筛选范围、记录顺序及示例／个人模式未变时，编号、时刻和分组等元信息更新保留回放进度；范围或排序变化仍重新开始。相机使用全点精确约束、完整投影检查和有界缓存；回放使用累计距离索引。视频在录制前准备全部镜头并分片让出主线程。
+
+`prepareReadOnlyTrip` 建立可信的递归只读记录边界，视频快照可共享通过该边界的几何，只复制呈现所需字段；外部可变输入仍须复制，不携带完整历史或候选几何。仅检查 `Object.isFrozen()` 不足以判断记录已经通过此边界，应使用 `isReadOnlyTrip`。
 
 主线确认和候选接受是独立状态；直接保存、只改时刻及恢复旧草稿不能静默接受新候选。行程身份使用实际日期，查询日期不能替代；旧记录中的日期矛盾保留并提示，不能阻止无关保存。绘制和取景共用完整路线几何，兼容合法旧版 `legs`，不连接未记录的行程间隙。
 
 ## 本机接口与请求控制
 
-| 接口                    | 用途                                 | 服务端总预算   |
-| ----------------------- | ------------------------------------ | -------------- |
-| `GET /api/train`        | 列车停站与时刻查询，含允许的参考降级 | 75 秒          |
-| `GET /api/flight`       | 单日期航班查询                       | 20 秒          |
-| `POST /api/route`       | 实际乘坐区间的路线解析               | 75 秒          |
-| `GET /api/diagnostics`  | 进程内聚合连接、队列及缓存状态       | 不执行外部查询 |
-| `GET /api/capabilities` | 部署模式、RailGo 开关及公开提示      | 不执行外部查询 |
+| 接口                    | 用途                                           | 服务端总预算   |
+| ----------------------- | ---------------------------------------------- | -------------- |
+| `GET /api/train`        | 列车停站与时刻查询，含允许的参考降级           | 75 秒          |
+| `GET /api/flight`       | 单日期航班查询                                 | 20 秒          |
+| `POST /api/route`       | 实际乘坐区间的路线解析                         | 75 秒          |
+| `GET /api/diagnostics`  | 进程内聚合连接、队列及缓存状态                 | 不执行外部查询 |
+| `GET /api/capabilities` | 部署模式、可选／默认来源、覆盖、版本及刷新能力 | 不执行外部查询 |
 
 `createTravelServer(...)` 可注入模拟上游并监听临时端口，供测试使用；正常启动仍固定本机地址。请求保留 Host/Origin 校验和请求体限制，不接受任意上游 URL。公开模式的外层代理不得缓存 `/api/*`，也不把聚合诊断误当成用户个人数据同步接口。
 
-线路返回通过 `resolution.state` 区分 `ready`、`needs-confirmation`、`unavailable`，待确认示意同时带有 `requiresConfirmation`。错误保留可读 `error`、稳定 `code` 和 `retryable`，界面据此提示调整输入、重试或取消。
+线路返回通过 `resolution.state` 区分 `ready`、`needs-confirmation`、`unavailable`，待确认参考或示意同时带有 `requiresConfirmation`。错误保留可读 `error`、稳定 `code` 和 `retryable`，界面据此提示调整输入、重试或取消。
+
+铁路 `POST /api/route` 的可选 `provider` 仅接受 `railgo | osm-local`；本机默认前者，公开默认后者。`/api/capabilities` 保留 `railgoEnabled`，另返回 `defaultRailProvider`、`railProviders`、覆盖与版本及来源级自动刷新能力。缓存隔离来源和数据版本。`routeProvider` 表示请求选择的通道，即使降级为 12306 示意也保留；实际归属及标签须结合 `routeSource` 和 `quality`，不能仅靠 provider 将示意标成 OSM 轨道。`routeDataVersion` 和 `routeEvidence` 随候选、历史、草稿及备份保存，旧记录缺少这些字段仍兼容。
+
+草稿的 `providerDataVersion` 进入前端缓存键，同版本恢复保留接受，来源或版本变化清除缓存与候选授权并要求重查，显式 `dataVersion: null`（包括有效白名单到期）也会在重新读取能力后撤销 OSM 轨道候选，但能力未知或旧协议省略版本字段不触发撤销，也不改写正式旧主线的 `routeDataVersion`、几何与时刻。
 
 预算包含排队、查询和回退，单次上游请求最多 18 秒；客户端通过 `X-Travel-Budget-Ms` 传递剩余预算，不能提高服务端上限。客户端普通列车／路线请求为 80 秒、航班为 25 秒，并受父级期限约束。单行完整匹配最多 150 秒，一批最多五分钟；取消或总期限到达后不再启动回退。
 
@@ -98,11 +116,18 @@ pnpm run test:browser
 
 Node 测试使用本地夹具、`fake-indexeddb`、模拟上游和临时回环端口，不依赖真实来源当天可用性。浏览器回归默认使用已安装的 Chrome，由 Playwright 启动 `scripts/browser-server.mjs`，固定在 `127.0.0.1:43717` 使用合成数据和隔离上下文。测试结束自动关闭测试服务；不能复用用户的 4173 页面或真实记录。
 
-若使用软件 WebGL，先准备锁定 Playwright 版本对应的 Chromium，再运行：
+可直接复用已安装的 Chrome 使用软件 WebGL：
 
 ```sh
-pnpm exec playwright install chromium
-TRAVEL_TEST_SOFTWARE_GL=1 pnpm run test:browser
+TRAVEL_TEST_CHANNEL=chrome TRAVEL_TEST_SOFTWARE_GL=1 pnpm run test:browser
+```
+
+启用 `TRAVEL_TEST_SOFTWARE_GL=1` 时，已有锁定 Playwright 对应 Chromium 的环境可省略 `TRAVEL_TEST_CHANNEL`，让测试使用该 Chromium。默认不设置软件图形变量时仍使用 Chrome 默认图形后端，报告中的实际 renderer 才是判断依据。
+
+只运行相关浏览器用例时直接调用已安装的 Playwright，参数示例：
+
+```sh
+pnpm exec playwright test tests/browser/journey.spec.mjs --grep '390px|桌面地图总览'
 ```
 
 浏览器失败截图和 trace 写入 `output/playwright/results/`，HTML 报告位于 `playwright-report/`，均不提交到 Git。近五分钟长片不属于常规回归，可单独执行：
@@ -113,7 +138,9 @@ TRAVEL_VIDEO_LONG=1 pnpm exec playwright test tests/browser/video.spec.mjs --gre
 
 Safari 和 QuickTime 验收须使用真实应用，自动化 WebKit 或 Chrome 解码不能代替。视觉验证需区分桌面、390px 窄屏、全屏、2D/3D 和自由视角；视频需检查实际导出、预览、取消、格式回退和首尾画面。已有结果及未覆盖范围见 [验收记录](VALIDATION.md)，外部来源核实日期不因本地测试通过而更新。
 
-性能基线使用临时回环端口、独立浏览器及合成的 1 千／1 万／15 万路线点和 500 段记录，结果写入 `output/performance-baseline.json`。与其他图形测试串行执行，记录浏览器及图形后端；软件渲染结果不能外推为用户硬件表现。方法和已有瓶颈见 [性能基线](PERFORMANCE.md)。
+性能基线使用临时回环端口、独立浏览器及合成的 1 千／1 万／15 万路线点和 500 段记录，结果写入 `output/performance-baseline.json`。与其他图形测试串行执行，记录浏览器及图形后端；软件渲染结果不能外推为用户硬件表现。方法、优化前后结果及剩余限制见 [性能记录](PERFORMANCE.md)。
+
+OSM 轨道导入由 `scripts/import-rail-osm.mjs` 读取显式 `--osm`、`--manifest`、`--output`，检查原始关系版本、连续性、方向、站点投影、长度及证据有效期，成功后才替换输出。清单的 `sourceDate`、`checkedDate` 必须是实际取得/核实日期；不能用重建日期顺延白名单。输入、命令和 ODbL 归属见 [试点维护说明](../scripts/rail-data/NOTICE.md)。该流程不属于普通 build。
 
 文档或低影响样式变更只做相应检查，不新增重复测试。只格式化自己修改的文件，例如：
 

@@ -16,6 +16,8 @@
 
 纳入源码、测试、合成示例、公开运行数据、文档、许可证和锁文件。`dist/data/` 是运行所需的数据文件；`dist/vendor/` 是构建生成的第三方浏览器运行库，使用 `pnpm run build` 恢复。
 
+OSM 参考轨道的派生数据位于 `dist/data/rail-corridors.json`，原始对象、核实清单与归属位于 `scripts/rail-data/`，维护方法见 [试点说明](../scripts/rail-data/NOTICE.md)。提交数据更新时一并保留对应来源、版本、证据及 ODbL 条件；这些公开资料不属于个人行程，也不受根目录 MIT 重新授权。
+
 `.gitignore` 排除依赖、运行库副本、个人行程文本、备份、视频、截图与追踪输出、浏览器配置、环境文件、私钥和编辑器临时文件。忽略规则只作用于未跟踪文件，因此不要主动使用 `git add -f` 上传这些材料。
 
 ## 本地验证
@@ -48,10 +50,22 @@ pnpm install --frozen-lockfile
 pnpm run build
 ```
 
-本地修改完成并验证后，提交具体文件再推送：
+本地修改完成并验证后，先核对改动，按功能暂存具体文件并提交。下例仅演示 README 单文件修订，实际文件和说明须对应本次修改：
 
 ```sh
 git status --short
+git diff -- README.md
+git add README.md
+git diff --cached --check
+git diff --cached
+git commit -m "docs: clarify local setup instructions"
+```
+
+跨模块改动可分批提交，但每批需包含运行所需的关联模块和数据。沿用近期提交的英文 Conventional Commit 风格，正文记录变化及实际验证；提交后再次检查 `git status --short` 和 `git log --oneline -3`。本地提交不代表已经推送或部署。
+
+需要同步到公开仓库时，再单独推送：
+
+```sh
 git push origin main
 ```
 
