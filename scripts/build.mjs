@@ -15,6 +15,12 @@ for (const [from, to] of [
   ['node_modules/three/build/three.core.js', 'three.core.js'],
 ])
   await cp(from, `dist/vendor/${to}`);
-for (const file of ['index.html', 'app.js', 'styles.css', 'core.js'])
+for (const file of [
+  'index.html',
+  'app.js',
+  'styles.css',
+  'controls.css',
+  'core.js',
+])
   await access(`dist/${file}`);
 console.log('已生成本地网站资源。');

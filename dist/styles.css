@@ -386,11 +386,10 @@ h1 {
   border-radius: 8px;
   min-width: 42px;
   height: 42px;
+  padding: 0 10px;
   background: #fffffff0;
   font-size: 13px;
-}
-.map-tools button:first-child {
-  font-size: 25px;
+  white-space: nowrap;
 }
 .map-tools .active {
   color: var(--accent);
@@ -518,11 +517,6 @@ input[type='range'] {
   margin: 7px 0 10px;
 }
 .playback select {
-  background: #edf6fd;
-  border: 1px solid #c8dfef;
-  padding: 5px;
-  color: #254f6b;
-  border-radius: 5px;
   font-size: 13px;
 }
 .follow-label {
@@ -729,7 +723,7 @@ details label {
   font-size: 14px;
   color: #3d617a;
 }
-input:not([type='checkbox']):not([type='radio']):not([type='range']),
+input:where(:not([type='checkbox']):not([type='radio']):not([type='range'])),
 textarea {
   display: block;
   width: 100%;
@@ -1092,12 +1086,6 @@ summary {
   width: 100%;
   max-width: 100%;
   margin-top: 10px;
-  padding: 8px;
-  background: #ffffff;
-  border: 1px solid #bdd8e8;
-  border-radius: 5px;
-  color: #285771;
-  font-size: 14px;
 }
 .map-heading h2 {
   max-width: calc(100vw - 570px);
@@ -1135,12 +1123,6 @@ summary {
 #train-candidates select {
   width: 100%;
   margin-top: 8px;
-  padding: 10px 7px;
-  font-size: 14px;
-  color: var(--text);
-  background: #ffffff;
-  border: 1px solid #c2dce9;
-  border-radius: 5px;
 }
 .form-status.reference {
   background: #fff8e9;
@@ -1325,12 +1307,6 @@ input[type='range']::-moz-range-thumb {
 .video-settings select {
   width: 100%;
   margin-top: 8px;
-  padding: 10px;
-  border: 1px solid #ccdeeb;
-  border-radius: 6px;
-  color: var(--text);
-  background: #f7fbfe;
-  font-size: 14px;
 }
 #video-dialog {
   width: min(720px, calc(100% - 26px));
@@ -1372,6 +1348,7 @@ input[type='range']::-moz-range-thumb {
   .map-tools button {
     font-size: 12px;
     min-width: 34px;
+    padding: 0 7px;
   }
   .map-tools button:last-child {
     padding: 0 8px;
@@ -1456,8 +1433,7 @@ input[type='range']::-moz-range-thumb {
   font-size: 12px;
   color: #53768e;
 }
-.batch-row input:not([type='checkbox']),
-.batch-row select {
+.batch-row input:where(:not([type='checkbox'])) {
   display: block;
   width: 100%;
   margin-top: 5px;
@@ -1472,7 +1448,7 @@ input[type='range']::-moz-range-thumb {
 .batch-row .form-row {
   margin-bottom: 12px;
 }
-.batch-row input.missing {
+.batch-row input:where(.missing) {
   border-color: #d29d64;
   background: #fff9f0;
 }
@@ -1590,14 +1566,6 @@ input[type='range']::-moz-range-thumb {
   max-width: 200px;
   flex: 1;
 }
-select {
-  background: #f7fbfe;
-  border: 1px solid #c5dbea;
-  border-radius: 6px;
-  padding: 7px 8px;
-  color: var(--text);
-  min-width: 0;
-}
 #filter-search {
   margin: 8px 0;
   padding: 8px 10px;
@@ -1664,7 +1632,6 @@ select {
 }
 .bulk-toolbar select {
   max-width: 110px;
-  padding: 4px;
 }
 .bulk-toolbar button {
   font-size: 12px;
@@ -1759,6 +1726,7 @@ details.batch-row > summary {
 details.batch-row > summary label {
   display: flex;
   align-items: center;
+  gap: 8px;
   margin: 0;
 }
 details.batch-row > summary .batch-state {
@@ -1792,9 +1760,6 @@ details.batch-row[open] > summary::after {
 .batch-row-body {
   padding: 10px 14px;
   border-top: 1px solid var(--border);
-}
-.batch-row input[type='checkbox'] {
-  margin-right: 8px;
 }
 #batch-review > .field-hint {
   margin: 5px 0;
@@ -2107,9 +2072,6 @@ details.batch-row[open] > summary::after {
   background: #edf7ff;
   border-radius: 8px;
   margin: 9px 0;
-}
-#map-more {
-  font-size: 13px;
 }
 #editor.batch-editor:has(#batch-review:not(.hidden)) {
   padding-top: 18px;
