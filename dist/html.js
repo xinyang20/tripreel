@@ -33,3 +33,6 @@ export function safe(strings, ...values) {
   });
   return new SafeHTML(markup);
 }
+// Inline icon from the SVG sprite in index.html.
+export const icon = (name, className = 'icon') =>
+  safe`<svg class="${className}" aria-hidden="true" focusable="false"><use href="#i-${name}"></use></svg>`;

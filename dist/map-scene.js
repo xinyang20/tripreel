@@ -6,6 +6,7 @@ import { canRenderRoute } from './domain.js';
 const isPoint = (p) =>
   Array.isArray(p) && p.length === 2 && p.every(Number.isFinite);
 import { mercatorPoint } from './camera-fit.js';
+import { createVehicleRenderer, vehiclePose } from './vehicles.js';
 export const baseStyle = {
   version: 8,
   sources: {
@@ -84,13 +85,14 @@ const geometryStamp = (trip) =>
     trip.from?.coord?.join(','),
     trip.to?.coord?.join(','),
   ].join('|');
-function flightGeometry(trip) {
+function flightGeometry(trip, widen = 1) {
   const path = flightArc(trip.from.coord, trip.to.coord).map(
       (c) => new T.Vector3(...mercatorPoint(c)),
     ),
     radius =
       mercatorPoint([...trip.from.coord, 1])[2] *
-      Math.max(450, Math.min(5000, trip.distance * 3));
+      Math.max(450, Math.min(5000, trip.distance * 3)) *
+      widen;
   return new T.TubeGeometry(
     new T.CatmullRomCurve3(path),
     100,
@@ -240,7 +242,14 @@ function updateFlightLayer(map, trips, onProjection) {
     const scene = new T.Scene(),
       camera = new T.Camera(),
       projection = new T.Matrix4();
-    state = { scene, meshes: new Map(), onProjection };
+    state = {
+      scene,
+      meshes: new Map(),
+      onProjection,
+      vehicles: null,
+      replay: null,
+      highlight: null,
+    };
     flightLayers.set(map, state);
     let renderer;
     map.addLayer({
@@ -260,6 +269,17 @@ function updateFlightLayer(map, trips, onProjection) {
         camera.projectionMatrix.copy(projection);
         renderer.resetState();
         renderer.render(scene, camera);
+        const { frame, options: replayOptions } = state.replay || {};
+        if (frame) state.vehicles ||= createVehicleRenderer();
+        if (state.vehicles) {
+          state.vehicles.setPose(
+            frame ? vehiclePose(frame, map.getZoom(), replayOptions) : null,
+          );
+          state.vehicles.render(
+            renderer,
+            options.defaultProjectionData.mainMatrix,
+          );
+        }
         state.onProjection(projection);
       },
       onRemove() {
@@ -268,6 +288,9 @@ function updateFlightLayer(map, trips, onProjection) {
           mesh.material.dispose();
         }
         state.meshes.clear();
+        clearHighlight(state);
+        state.vehicles?.dispose();
+        state.vehicles = null;
         scene.clear();
         renderer?.dispose();
         if (flightLayers.get(map) === state) flightLayers.delete(map);
@@ -307,6 +330,137 @@ function updateFlightLayer(map, trips, onProjection) {
       mesh.material.dispose();
       state.meshes.delete(key);
     }
+}
+function clearHighlight(state) {
+  if (!state.highlight) return;
+  state.scene.remove(state.highlight.mesh);
+  state.highlight.mesh.geometry.dispose();
+  state.highlight.mesh.material.dispose();
+  state.highlight = null;
+}
+// Brighter, thicker copy of the active flight arc, drawn up to the aircraft.
+function updateFlightHighlight(state, trip, fraction) {
+  if (!trip) return clearHighlight(state);
+  const stamp = geometryStamp(trip);
+  if (state.highlight?.trip !== trip || state.highlight.stamp !== stamp) {
+    clearHighlight(state);
+    const mesh = new T.Mesh(
+      flightGeometry(trip, 1.9),
+      new T.MeshBasicMaterial({ color: '#4c5fb6', depthTest: false }),
+    );
+    mesh.renderOrder = 1;
+    state.scene.add(mesh);
+    state.highlight = { trip, stamp, mesh };
+  }
+  state.highlight.mesh.geometry.setDrawRange(
+    0,
+    Math.round(Math.max(0, Math.min(1, fraction)) * 100) * 6 * 6,
+  );
+}
+const mercatorLengths = new WeakMap();
+// line-progress measures projected length, so convert distance travelled (km)
+// into the matching share of the line's Mercator length.
+function mercatorShare(index, along) {
+  let lengths = mercatorLengths.get(index);
+  if (!lengths) {
+    const points = index.coordinates.map((p) => mercatorPoint(p));
+    lengths = new Float64Array(points.length);
+    for (let i = 1; i < points.length; i++)
+      lengths[i] =
+        lengths[i - 1] +
+        Math.hypot(
+          points[i][0] - points[i - 1][0],
+          points[i][1] - points[i - 1][1],
+        );
+    mercatorLengths.set(index, lengths);
+  }
+  const total = lengths.at(-1);
+  if (!total) return 0;
+  const { cumulative } = index;
+  let lo = 1,
+    hi = cumulative.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (cumulative[mid] >= along) hi = mid;
+    else lo = mid + 1;
+  }
+  const span = cumulative[lo] - cumulative[lo - 1],
+    t = span
+      ? Math.max(0, Math.min(1, (along - cumulative[lo - 1]) / span))
+      : 1;
+  return (lengths[lo - 1] + (lengths[lo] - lengths[lo - 1]) * t) / total;
+}
+const TRAVELLED = '#0f5f8f';
+const activeLine = new WeakMap();
+// Show the moving vehicle and the travelled part of the current segment.
+export function setReplayFrame(map, frame, options = {}) {
+  const state = flightLayers.get(map),
+    source = map.getSource('journey-active');
+  if (!state || !source) return;
+  const live = frame?.item?.type === 'trip' ? frame : null;
+  state.replay = live ? { frame: live, options } : null;
+  const container = map.getContainer?.();
+  // Exposed for regression checks; written only when the value changes.
+  if (container && container.dataset.vehicle !== (live?.trip.mode || ''))
+    container.dataset.vehicle = live?.trip.mode || '';
+  const track = live?.trip.mode !== 'flight' && live?.avatar.track;
+  const previous = activeLine.get(map);
+  if ((track?.index || null) !== (previous?.index || null)) {
+    source.setData({
+      type: 'FeatureCollection',
+      features: track
+        ? [
+            {
+              type: 'Feature',
+              properties: {},
+              geometry: {
+                type: 'LineString',
+                coordinates: track.index.coordinates,
+              },
+            },
+          ]
+        : [],
+    });
+    activeLine.set(map, { index: track?.index || null, share: -1 });
+  }
+  if (track) {
+    const share = mercatorShare(track.index, track.along),
+      line = activeLine.get(map);
+    if (Math.abs(share - line.share) > 0.0005 || share >= 1) {
+      line.share = share;
+      if (map.getContainer)
+        map.getContainer().dataset.travelled = share.toFixed(3);
+      map.setPaintProperty(
+        'journey-progress',
+        'line-gradient',
+        share >= 1
+          ? ['step', ['line-progress'], TRAVELLED, 1, TRAVELLED]
+          : share <= 0
+            ? [
+                'step',
+                ['line-progress'],
+                'rgba(15,95,143,0)',
+                1,
+                'rgba(15,95,143,0)',
+              ]
+            : [
+                'step',
+                ['line-progress'],
+                TRAVELLED,
+                share,
+                'rgba(15,95,143,0)',
+              ],
+      );
+    }
+  }
+  updateFlightHighlight(
+    state,
+    live?.trip.mode === 'flight' && canRenderRoute(live.trip)
+      ? live.trip
+      : null,
+    live?.avatar.arc?.fraction || 0,
+  );
+  map.triggerRepaint();
 }
 export function installJourneyLayers(map, trips, onProjection = () => {}) {
   return measureStage('layers', () =>
@@ -354,6 +508,27 @@ function updateJourneyLayers(map, trips, onProjection) {
       source: 'journeys',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#248ebd', 'line-width': 3.2 },
+    });
+    map.addSource('journey-active', {
+      type: 'geojson',
+      lineMetrics: true,
+      data: { type: 'FeatureCollection', features: [] },
+    });
+    map.addLayer({
+      id: 'journey-progress',
+      type: 'line',
+      source: 'journey-active',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-width': 5,
+        'line-gradient': [
+          'step',
+          ['line-progress'],
+          'rgba(15,95,143,0)',
+          1,
+          'rgba(15,95,143,0)',
+        ],
+      },
     });
     map.addSource('journey-stops', { type: 'geojson', data: points });
     map.addLayer({

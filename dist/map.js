@@ -8,7 +8,9 @@ import {
   journeyBounds,
   journeyWorldPoints,
   avatarPixel,
+  setReplayFrame,
 } from './map-scene.js';
+import { icon } from './html.js';
 import { createCameraFitCache } from './camera-fit.js';
 import { buildTimeline, replayFrame } from './replay.js';
 import {
@@ -36,6 +38,7 @@ let map,
   resizeTimer,
   lastTick = 0,
   lastCamera = 0,
+  lastFollow = 0,
   playbackPhase = '',
   online = false,
   projection,
@@ -227,8 +230,8 @@ function paintLabels() {
 function positionAvatar() {
   const p = map && avatarPixel(map, current?.avatar, projection);
   $('traveller').classList.toggle('hidden', !p);
-  if (p)
-    $('traveller').style.transform = `translate(${p.x - 24}px,${p.y - 47}px)`;
+  $('traveller').classList.toggle('waiting', current?.item.type === 'gap');
+  if (p) $('traveller').style.transform = `translate(${p.x}px,${p.y}px)`;
 }
 export function drawMap({ geometry = true } = {}) {
   if (geometry) overviewPlaces = endpointPlaces(state.trips);
@@ -295,6 +298,10 @@ const setText = (element, value) => {
 export function updateReplay() {
   current = replayFrame(timeline, state.progress);
   selectedTrip = current?.trip || null;
+  if (ready && map)
+    setReplayFrame(map, current, {
+      pixelScale: narrowScreen.matches ? 0.75 : 1,
+    });
   if (!current) {
     positionAvatar();
     $('playback-title').textContent = '准备好，再出发';
@@ -306,7 +313,6 @@ export function updateReplay() {
   }
   const { trip, avatar, item } = current;
   setText($('playback-title'), current.title);
-  setText(document.querySelector('.traveller-icon'), current.icon);
   setText($('traveller-label'), avatar.label);
   setText($('current-time'), localDateTime(avatar.stamp).slice(11));
   setText(
@@ -328,18 +334,25 @@ export function updateReplay() {
     fitMap(trip, duration);
     lastCamera = performance.now() + duration;
   }
+  // Follow with exponential smoothing so the camera glides instead of stepping.
+  const now = performance.now(),
+    elapsed = Math.min(0.1, Math.max(0, (now - lastFollow) / 1000));
+  lastFollow = now;
   if (
+    map &&
     state.playing &&
     $('follow').checked &&
     avatar.coord &&
-    performance.now() - lastCamera > 130
+    now > lastCamera &&
+    !map.isMoving()
   ) {
-    lastCamera = performance.now();
-    map?.easeTo({
-      center: avatar.coord,
-      duration: 160,
-      easing: (x) => x,
-      essential: true,
+    const centre = map.getCenter(),
+      share = reduced ? 1 : 1 - Math.exp(-elapsed * 5);
+    map.jumpTo({
+      center: [
+        centre.lng + (avatar.coord[0] - centre.lng) * share,
+        centre.lat + (avatar.coord[1] - centre.lat) * share,
+      ],
     });
   }
   map?.triggerRepaint();
@@ -350,7 +363,7 @@ export function pause() {
   state.playing = false;
   playbackPhase = '';
   cancelAnimationFrame(frame);
-  $('play').textContent = '▶';
+  $('play').innerHTML = icon('play');
   $('play').setAttribute('aria-label', '播放旅程');
 }
 function tick(now) {
@@ -407,7 +420,7 @@ $('play').onclick = () => {
   if (state.progress >= 1) state.progress = 0;
   overview = false;
   state.playing = true;
-  $('play').textContent = 'Ⅱ';
+  $('play').innerHTML = icon('pause');
   $('play').setAttribute('aria-label', '暂停旅程');
   updateReplay();
   lastTick = performance.now();

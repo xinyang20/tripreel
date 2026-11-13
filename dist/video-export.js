@@ -8,6 +8,7 @@ import {
   journeyBounds,
   prepareJourneyWorldPoints,
   avatarPixel,
+  setReplayFrame,
 } from './map-scene.js';
 import { fitInViewport } from './camera-fit.js';
 import { buildTimeline, replayFrame } from './replay.js';
@@ -27,6 +28,12 @@ import {
   videoFilename,
   VIDEO_MAX_BYTES,
 } from './video-options.js';
+const DARK = '#0f1e2b',
+  ON_DARK = '#eef4f9',
+  ON_DARK_SOFT = '#a7b8c7',
+  TRAVELLED = '#0f5f8f',
+  SANS = '"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif',
+  DISPLAY = '"Songti SC","STSong","Noto Serif SC","Source Han Serif SC",serif';
 let settings, controller, downloadUrl;
 const abortError = () => new DOMException('已取消视频生成。', 'AbortError');
 const formatCandidates = [
@@ -191,11 +198,11 @@ function renderMovieFrame(
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(map.getCanvas(), 0, 0, w, h);
   const shade = ctx.createLinearGradient(0, 0, 0, 180);
-  shade.addColorStop(0, 'rgba(255,255,255,.94)');
-  shade.addColorStop(1, 'rgba(255,255,255,0)');
+  shade.addColorStop(0, 'rgba(243,246,249,.95)');
+  shade.addColorStop(1, 'rgba(243,246,249,0)');
   ctx.fillStyle = shade;
   ctx.fillRect(0, 0, w, 180);
-  ctx.font = '12px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.font = `12px ${SANS}`;
   const center = map.getCenter(),
     labelKey = [
       visual.overview
@@ -233,7 +240,7 @@ function renderMovieFrame(
       Math.max(l.x, Math.min(l.x + l.width, l.anchorX)),
       Math.max(l.y, Math.min(l.y + l.height, l.anchorY)),
     );
-    ctx.strokeStyle = '#a8c9dc';
+    ctx.strokeStyle = '#b7cddf';
     ctx.stroke();
     rounded(
       ctx,
@@ -241,11 +248,11 @@ function renderMovieFrame(
       l.y,
       l.width,
       l.height,
-      5,
-      l.merged ? '#edf7ff' : 'rgba(255,255,255,.95)',
-      '#b6d5e6',
+      6,
+      l.merged ? '#e2edf6' : 'rgba(255,255,255,.95)',
+      '#cfdbe5',
     );
-    ctx.fillStyle = '#325f7a';
+    ctx.fillStyle = '#11222f';
     ctx.textAlign = 'center';
     ctx.fillText('• ' + l.name, l.x + l.width / 2, l.y + 18);
   }
@@ -253,29 +260,29 @@ function renderMovieFrame(
   if (pixel && !visual.overview) {
     const x = pixel.x / scale,
       y = pixel.y / scale;
-    ctx.beginPath();
-    ctx.arc(x, y - 22, 25, 0, Math.PI * 2);
-    ctx.fillStyle = '#fff';
-    ctx.fill();
-    ctx.strokeStyle = '#7cbbe5';
-    ctx.lineWidth = 3;
-    ctx.stroke();
+    if (visual.frame.item.type === 'gap') {
+      ctx.beginPath();
+      ctx.arc(x, y, 7, 0, Math.PI * 2);
+      ctx.fillStyle = TRAVELLED;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+    }
     ctx.textAlign = 'center';
-    ctx.font = '30px "Apple Color Emoji","Segoe UI Emoji",sans-serif';
-    ctx.fillText(visual.frame.icon, x, y - 11);
-    ctx.font = '13px "PingFang SC",sans-serif';
+    ctx.font = `500 13px ${SANS}`;
     const label = visual.frame.avatar.label,
-      lw = ctx.measureText(label).width + 20;
-    rounded(ctx, x - lw / 2, y + 12, lw, 28, 5, '#ffffffee', '#c3dcea');
-    ctx.fillStyle = '#285774';
-    ctx.fillText(label, x, y + 31);
+      lw = ctx.measureText(label).width + 22;
+    rounded(ctx, x + 22, y - 12, lw, 24, 12, DARK);
+    ctx.fillStyle = ON_DARK;
+    ctx.fillText(label, x + 22 + lw / 2, y + 5);
   }
   ctx.textAlign = 'left';
-  ctx.fillStyle = '#7897ac';
-  ctx.font = '12px sans-serif';
-  ctx.fillText('TRIPREEL  /  途映', 42, 43);
-  ctx.fillStyle = '#1c3b51';
-  ctx.font = 'bold 28px "PingFang SC",sans-serif';
+  ctx.fillStyle = '#536677';
+  ctx.font = `500 12px ${SANS}`;
+  ctx.fillText('TRIPREEL  ·  途映', 42, 43);
+  ctx.fillStyle = '#11222f';
+  ctx.font = `400 30px ${DISPLAY}`;
   const first = options.trips[0],
     last = options.trips.at(-1);
   ctx.fillText(
@@ -285,8 +292,8 @@ function renderMovieFrame(
     42,
     84,
   );
-  ctx.font = '14px "PingFang SC",sans-serif';
-  ctx.fillStyle = '#5d819a';
+  ctx.font = `14px ${SANS}`;
+  ctx.fillStyle = '#33485a';
   ctx.fillText(
     options.hideDates
       ? `${options.trips.length} 段旅程`
@@ -294,9 +301,9 @@ function renderMovieFrame(
     42,
     115,
   );
-  rounded(ctx, 40, 613, 1200, 65, 11, 'rgba(255,255,255,.94)', '#c7e0f2');
-  ctx.fillStyle = '#275776';
-  ctx.font = '16px "PingFang SC",sans-serif';
+  rounded(ctx, 40, 610, 1200, 70, 12, DARK);
+  ctx.fillStyle = ON_DARK;
+  ctx.font = `400 18px ${DISPLAY}`;
   ctx.fillText(
     visual.overview
       ? visual.progress >= 1
@@ -304,27 +311,29 @@ function renderMovieFrame(
         : '旅程即将开始'
       : visual.frame.title,
     61,
-    640,
+    638,
   );
-  ctx.font = '12px "PingFang SC",sans-serif';
-  ctx.fillStyle = '#638398';
-  ctx.fillText(labelCache.routeNotes.get(visual.frame.trip.id), 61, 661);
+  ctx.font = `12px ${SANS}`;
+  ctx.fillStyle = ON_DARK_SOFT;
+  ctx.fillText(labelCache.routeNotes.get(visual.frame.trip.id), 61, 659);
   ctx.textAlign = 'right';
+  ctx.fillStyle = ON_DARK;
+  ctx.font = `400 18px ${DISPLAY}`;
   ctx.fillText(
     options.hideDates
       ? '旅程回放'
       : localDateTime(visual.frame.avatar.stamp).replace('T', '  '),
-    1215,
-    640,
+    1219,
+    638,
   );
   ctx.textAlign = 'left';
-  ctx.fillStyle = '#cee7f6';
-  ctx.fillRect(61, 670, 1158, 3);
-  ctx.fillStyle = '#71b1df';
-  ctx.fillRect(61, 670, 1158 * visual.progress, 3);
+  ctx.fillStyle = '#2a3d4e';
+  ctx.fillRect(61, 668, 1158, 3);
+  ctx.fillStyle = '#a4d4f8';
+  ctx.fillRect(61, 668, 1158 * visual.progress, 3);
   ctx.textAlign = 'right';
-  ctx.font = '10px sans-serif';
-  ctx.fillStyle = '#4c718a';
+  ctx.font = `11px ${SANS}`;
+  ctx.fillStyle = '#33485a';
   labelCache.attribution.forEach((line, i, lines) =>
     ctx.fillText(line, 1240, 709 - (lines.length - 1 - i) * 12),
   );
@@ -572,6 +581,9 @@ async function recordMovie(options, canvas, signal, onProgress) {
                   : [visual.frame.trip],
             );
           }
+          setReplayFrame(map, overview ? null : visual.frame, {
+            pixelScale: scale,
+          });
           map.triggerRepaint();
           onProgress(Math.min(1, elapsed / seconds), seconds);
           if (elapsed >= seconds) {

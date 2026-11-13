@@ -16,9 +16,104 @@
     <script type="module" src="app.js"></script>
   </head>
   <body>
+    <svg class="icon-sprite" aria-hidden="true" focusable="false">
+      <symbol id="i-brand" viewBox="0 0 24 24">
+        <path
+          d="M4.5 18.5C7 11 13.5 15 16 9.5"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-dasharray="0.1 3.4"
+        />
+        <circle cx="4.5" cy="18.5" r="2.2" fill="currentColor" />
+        <path
+          d="M17.5 2.8a3.6 3.6 0 0 1 3.6 3.6c0 2.7-3.6 6.3-3.6 6.3s-3.6-3.6-3.6-6.3a3.6 3.6 0 0 1 3.6-3.6z"
+          fill="currentColor"
+        />
+        <circle cx="17.5" cy="6.4" r="1.3" fill="#fff" />
+      </symbol>
+      <symbol id="i-train" viewBox="0 0 24 24">
+        <g
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.7"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path
+            d="M8 3.5h8a4 4 0 0 1 4 4V15a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7.5a4 4 0 0 1 4-4z"
+          />
+          <path d="M6.5 8.2c3.6-1.1 7.4-1.1 11 0V11h-11z" />
+          <path d="M8 18l-2 3M16 18l2 3M7.5 14.5h.01M16.5 14.5h.01" />
+        </g>
+      </symbol>
+      <symbol id="i-plane" viewBox="0 0 24 24">
+        <path
+          d="M12 2.6c.9 0 1.4 1 1.4 2.2v4.8l7.4 4.3v2l-7.4-2.3v4.1l2.3 1.8v1.6L12 20l-3.7 1.1v-1.6l2.3-1.8v-4.1l-7.4 2.3v-2l7.4-4.3V4.8c0-1.2.5-2.2 1.4-2.2z"
+          fill="currentColor"
+        />
+      </symbol>
+      <symbol id="i-play" viewBox="0 0 24 24">
+        <path
+          d="M8.5 5.8v12.4a.8.8 0 0 0 1.2.7l9.6-6.2a.8.8 0 0 0 0-1.4L9.7 5.1a.8.8 0 0 0-1.2.7z"
+          fill="currentColor"
+        />
+      </symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24">
+        <rect
+          x="6.5"
+          y="5"
+          width="4"
+          height="14"
+          rx="1.2"
+          fill="currentColor"
+        />
+        <rect
+          x="13.5"
+          y="5"
+          width="4"
+          height="14"
+          rx="1.2"
+          fill="currentColor"
+        />
+      </symbol>
+      <symbol id="i-restart" viewBox="0 0 24 24">
+        <g
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3" />
+          <path d="M4.5 4.5v4h4" />
+        </g>
+      </symbol>
+      <symbol id="i-close" viewBox="0 0 24 24">
+        <path
+          d="M6.5 6.5l11 11M17.5 6.5l-11 11"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+        />
+      </symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24">
+        <path
+          d="M12 5.5v13M5.5 12h13"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.9"
+          stroke-linecap="round"
+        />
+      </symbol>
+    </svg>
     <header class="topbar">
       <a class="brand" href="/" aria-label="途映首页"
-        ><strong>途映</strong><span class="brand-en">TRIPREEL</span></a
+        ><svg class="brand-mark" aria-hidden="true" focusable="false">
+          <use href="#i-brand"></use></svg
+        ><strong>途映</strong><span class="brand-en">TripReel</span></a
       >
       <div class="top-actions">
         <span id="save-status" class="save-status">保存在此浏览器</span
@@ -94,7 +189,9 @@
         <div id="trip-list" class="trip-list"></div>
         <div class="panel-footer">
           <button id="add-trip" class="primary wide">
-            <span>＋</span> 添加一段旅程
+            <svg class="icon" aria-hidden="true" focusable="false">
+              <use href="#i-plus"></use></svg
+            >添加一段旅程
           </button>
           <div class="footer-actions">
             <button id="import-text" class="text-button">粘贴行程文本</button
@@ -139,11 +236,12 @@
           简约底图 · 可切换在线精细地图
         </div>
         <div class="map-legend">
-          <span><i class="train-line"></i>🚄 火车 · 铁路曲线</span
+          <span><i class="train-line"></i>火车 · 铁路曲线</span
+          ><span><i class="travelled-line"></i>已行驶</span
           ><span><i class="flight-line"></i>飞机 · 示意弧线</span>
         </div>
         <div id="traveller" class="traveller hidden" aria-hidden="true">
-          <div class="traveller-icon">🧑‍🚀</div>
+          <div class="traveller-pin"></div>
           <div id="traveller-label"></div>
         </div>
         <div class="playback" aria-label="旅程回放控制">
@@ -172,14 +270,18 @@
               aria-label="播放旅程"
               disabled
             >
-              ▶</button
+              <svg class="icon" aria-hidden="true" focusable="false">
+                <use href="#i-play"></use>
+              </svg></button
             ><button
               class="reset-button"
               id="restart"
               aria-label="从头播放"
               disabled
             >
-              ↺
+              <svg class="icon" aria-hidden="true" focusable="false">
+                <use href="#i-restart"></use>
+              </svg>
             </button>
             <div class="progress-area">
               <input
@@ -217,7 +319,11 @@
           <span class="eyebrow">A NEW CHAPTER</span>
           <h2 id="editor-title">添加旅程</h2>
         </div>
-        <button class="close" data-close="editor" aria-label="关闭">×</button>
+        <button class="close" data-close="editor" aria-label="关闭">
+          <svg class="icon" aria-hidden="true" focusable="false">
+            <use href="#i-close"></use>
+          </svg>
+        </button>
       </div>
       <div class="input-tabs" role="tablist" aria-label="录入方式">
         <button id="single-tab" role="tab" aria-selected="true" class="active">
@@ -232,11 +338,15 @@
           <legend class="sr-only">交通方式</legend>
           <label
             ><input type="radio" name="mode" value="train" checked /><span
-              >🚄 &nbsp; 火车</span
+              ><svg class="icon" aria-hidden="true" focusable="false">
+                <use href="#i-train"></use></svg
+              >火车</span
             ></label
           ><label
             ><input type="radio" name="mode" value="flight" /><span
-              >✈ &nbsp; 飞机</span
+              ><svg class="icon" aria-hidden="true" focusable="false">
+                <use href="#i-plane"></use></svg
+              >飞机</span
             ></label
           >
         </fieldset>
@@ -430,7 +540,11 @@
     <dialog id="about" aria-labelledby="about-title">
       <div class="dialog-heading">
         <h2 id="about-title">数据与说明</h2>
-        <button class="close" data-close="about" aria-label="关闭">×</button>
+        <button class="close" data-close="about" aria-label="关闭">
+          <svg class="icon" aria-hidden="true" focusable="false">
+            <use href="#i-close"></use>
+          </svg>
+        </button>
       </div>
       <div class="input-tabs" role="tablist" aria-label="数据与说明">
         <button
@@ -581,7 +695,9 @@
       <div class="dialog-heading">
         <h2 id="groups-title">管理旅程</h2>
         <button class="close" data-close="groups-dialog" aria-label="关闭">
-          ×
+          <svg class="icon" aria-hidden="true" focusable="false">
+            <use href="#i-close"></use>
+          </svg>
         </button>
       </div>
       <form id="group-form">
@@ -600,7 +716,9 @@
       <div class="dialog-heading">
         <h2 id="details-title">行程详情</h2>
         <button class="close" data-close="trip-details" aria-label="关闭">
-          ×
+          <svg class="icon" aria-hidden="true" focusable="false">
+            <use href="#i-close"></use>
+          </svg>
         </button>
       </div>
       <div id="details-body"></div>
@@ -610,7 +728,9 @@
       <div class="dialog-heading">
         <h2 id="restore-title">核对备份内容</h2>
         <button class="close" data-close="restore-dialog" aria-label="关闭">
-          ×
+          <svg class="icon" aria-hidden="true" focusable="false">
+            <use href="#i-close"></use>
+          </svg>
         </button>
       </div>
       <p class="field-hint">
@@ -646,7 +766,9 @@
           <h2 id="video-title">导出旅程视频</h2>
         </div>
         <button id="video-close" class="close" aria-label="关闭视频导出">
-          ×
+          <svg class="icon" aria-hidden="true" focusable="false">
+            <use href="#i-close"></use>
+          </svg>
         </button>
       </div>
       <p class="field-hint">
