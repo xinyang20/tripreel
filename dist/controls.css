@@ -1,8 +1,8 @@
 /* Shared controls keep their native form, keyboard, and accessibility semantics. */
 :root {
   --control-accent: #247ca8;
-  --control-border: #b9d0e0;
-  --control-hover: #edf7ff;
+  --control-border: var(--border-accent);
+  --control-hover: var(--raised);
   --control-ring: #247ca833;
   --control-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m4 6 4 4 4-4' fill='none' stroke='%23536f84' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --control-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3.5 8 3 3 6-6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -16,7 +16,7 @@
 }
 
 :is(input, select, textarea):hover:not(:disabled):not([readonly]) {
-  border-color: #7faac6;
+  border-color: var(--accent-strong);
 }
 
 :is(button, a, input, select, textarea, summary):focus-visible,
@@ -31,21 +31,21 @@
 
 :is(input, select, textarea):disabled {
   cursor: not-allowed;
-  color: #738898;
-  background-color: #eef3f6;
-  border-color: #d7e2ea;
+  color: var(--text-disabled);
+  background-color: var(--neutral-surface);
+  border-color: var(--border);
   opacity: 1;
 }
 
 :is(input, textarea)[readonly] {
-  background-color: #f0f5f8;
+  background-color: var(--neutral-surface);
   color: var(--muted);
 }
 
 :is(input, select, textarea)[aria-invalid='true'],
 :is(input, select, textarea):user-invalid {
-  border-color: #b45449;
-  background-color: #fff7f5;
+  border-color: var(--error);
+  background-color: var(--error-bg);
 }
 
 /* The closed control also has a consistent appearance in older browsers. */
@@ -56,14 +56,14 @@ select {
   max-width: 100%;
   padding: 8px 34px 8px 12px;
   border: 1px solid var(--control-border);
-  border-radius: 8px;
-  background-color: #f7fbfe;
+  border-radius: var(--radius-md);
+  background-color: var(--surface);
   background-image: var(--control-chevron);
   background-repeat: no-repeat;
   background-position: right 10px center;
   background-size: 16px;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--font-md);
   line-height: 1.5;
   cursor: pointer;
   text-overflow: ellipsis;
@@ -81,7 +81,7 @@ label > select:not(#batch-filter) {
 #batch-filter {
   --select-height: 34px;
   padding-block: 5px;
-  font-size: 13px;
+  font-size: var(--font-sm);
 }
 
 .playback select {
@@ -146,15 +146,15 @@ label > select:not(#batch-filter) {
     margin-block: 6px;
     padding: 5px;
     border: 1px solid var(--control-border);
-    border-radius: 10px;
-    background: #fff;
+    border-radius: var(--radius-lg);
+    background: var(--panel);
     color: var(--text);
-    box-shadow: 0 8px 28px #254d6a26;
+    box-shadow: var(--shadow-float);
     font: inherit;
     overflow: auto;
     overscroll-behavior: contain;
     scrollbar-width: thin;
-    scrollbar-color: #b5cddd transparent;
+    scrollbar-color: var(--border-accent) transparent;
   }
 
   select option {
@@ -164,10 +164,10 @@ label > select:not(#batch-filter) {
     min-height: 38px;
     padding: 8px 10px;
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--text);
-    font-size: 14px;
+    font-size: var(--font-md);
     font-weight: 400;
     line-height: 1.5;
     white-space: normal;
@@ -176,15 +176,15 @@ label > select:not(#batch-filter) {
   }
 
   select option:checked {
-    background: #e8f4fc;
-    color: #1d648c;
+    background: var(--selected);
+    color: var(--link);
     font-weight: 600;
   }
 
   select option:hover:not(:disabled),
   select option:focus-visible {
-    background: #dcedf9;
-    outline: 2px solid #77aecf;
+    background: var(--hover);
+    outline: 2px solid var(--accent-strong);
     outline-offset: -2px;
   }
 
@@ -197,8 +197,8 @@ label > select:not(#batch-filter) {
   }
 
   select option:disabled {
-    color: #8295a3;
-    background: #f4f7f9;
+    color: var(--text-disabled);
+    background: var(--neutral-surface);
     cursor: not-allowed;
   }
 }
@@ -211,9 +211,9 @@ input:is([type='checkbox'], [type='radio']) {
   flex: 0 0 18px;
   margin: 0;
   padding: 0;
-  border: 1.5px solid #819eb2;
-  border-radius: 5px;
-  background: #fff center / 16px no-repeat;
+  border: 1.5px solid var(--text-faint);
+  border-radius: var(--radius-sm);
+  background: var(--panel) center / 16px no-repeat;
   vertical-align: -3px;
   cursor: pointer;
 }
@@ -269,10 +269,10 @@ label.batch-accept {
   margin: 10px 0;
   padding: 11px 12px;
   border: 1px solid var(--control-border);
-  border-radius: 8px;
-  background: #fff;
-  font-size: 13px;
-  color: #3d617a;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  font-size: var(--font-sm);
+  color: var(--text-2);
 }
 
 .batch-accept input {
@@ -280,13 +280,13 @@ label.batch-accept {
 }
 
 .batch-accept:has(input:checked) {
-  background: #edf7ff;
-  border-color: #83b5d4;
-  color: #246389;
+  background: var(--raised);
+  border-color: var(--accent-strong);
+  color: var(--link);
 }
 
 .trip-card:has([data-select]:checked) {
-  border-color: #6ca6ca;
+  border-color: var(--accent-strong);
   box-shadow: inset 3px 0 0 var(--control-accent);
 }
 
@@ -314,9 +314,9 @@ label.batch-accept {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
-  border: 1.5px solid #819eb2;
+  border: 1.5px solid var(--text-faint);
   border-radius: 50%;
-  background: #fff;
+  background: var(--panel);
 }
 
 .transport-switch input:checked + span::after {
@@ -342,7 +342,7 @@ summary:not(.maplibregl-ctrl-attrib-button) {
   gap: 8px;
   min-height: 36px;
   padding: 7px 9px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   line-height: 1.6;
 }
 
@@ -352,8 +352,8 @@ summary::-webkit-details-marker {
 
 summary:not(.maplibregl-ctrl-attrib-button):hover,
 details[open] > summary:not(.maplibregl-ctrl-attrib-button) {
-  background: #edf6fc;
-  color: #286b95;
+  background: var(--raised);
+  color: var(--link);
 }
 
 summary:not(.maplibregl-ctrl-attrib-button)::after,
@@ -382,11 +382,11 @@ details[open] > summary::after {
 .batch-row-actions button {
   min-height: 34px;
   padding: 6px 12px;
-  border: 1px solid #b8d5e6;
-  border-radius: 7px;
-  background: #fff;
-  color: #2f729a;
-  font-size: 13px;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--link);
+  font-size: var(--font-sm);
   line-height: 1.5;
 }
 
@@ -400,36 +400,36 @@ details[open] > summary::after {
 #single-conflict {
   margin-block: 16px;
   padding: 14px;
-  border: 1px solid #dfc38b;
-  border-radius: 10px;
-  background: #fffcf5;
-  font-size: 13px;
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-lg);
+  background: var(--warn-bg);
+  font-size: var(--font-sm);
   line-height: 1.7;
 }
 
 #single-conflict h3 {
   margin-top: 0;
-  font-size: 15px;
-  color: #795a27;
+  font-size: var(--font-lg);
+  color: var(--warn-text);
 }
 
 #single-conflict table {
   width: 100%;
   min-width: 440px;
   border-collapse: collapse;
-  background: #fff;
+  background: var(--panel);
 }
 
 #single-conflict :is(th, td) {
   padding: 9px 10px;
-  border: 1px solid #e2e8eb;
+  border: 1px solid var(--border);
   text-align: left;
   overflow-wrap: anywhere;
 }
 
 #single-conflict th {
-  color: #3f6279;
-  background: #f1f7fb;
+  color: var(--text-2);
+  background: var(--raised);
   font-weight: 600;
 }
 
@@ -442,7 +442,7 @@ details[open] > summary::after {
 input[type='range'] {
   height: 24px;
   margin: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 
 input[type='range']:disabled {
@@ -463,34 +463,42 @@ progress#video-progress {
   overflow: hidden;
   border: 0;
   border-radius: 99px;
-  background: #dfedf6;
+  background: var(--track);
   color: var(--control-accent);
 }
 
 #video-progress::-webkit-progress-bar {
   border-radius: 99px;
-  background: #dfedf6;
+  background: var(--track);
 }
 
 #video-progress::-webkit-progress-value {
   border-radius: 99px;
-  background: linear-gradient(90deg, #5ca9d2, var(--control-accent));
+  background: linear-gradient(
+    90deg,
+    var(--accent-strong),
+    var(--control-accent)
+  );
 }
 
 #video-progress::-moz-progress-bar {
   border-radius: 99px;
-  background: linear-gradient(90deg, #5ca9d2, var(--control-accent));
+  background: linear-gradient(
+    90deg,
+    var(--accent-strong),
+    var(--control-accent)
+  );
 }
 
 input::-webkit-calendar-picker-indicator {
   padding: 3px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   opacity: 0.65;
   cursor: pointer;
 }
 
 input::-webkit-calendar-picker-indicator:hover {
-  background-color: #dbeefa;
+  background-color: var(--map-bg);
   opacity: 1;
 }
 
