@@ -111,6 +111,21 @@ function stopSingle({ flush = true } = {}) {
   $('save-trip').disabled = false;
   $('save-trip').textContent = '保存行程';
 }
+// The rail source select lives in the advanced settings; the lookup hint names the active source.
+function updateSourceHints(value = mode()) {
+  const label =
+    value === 'train' && $('trip-provider').value
+      ? $('trip-provider').selectedOptions[0]?.textContent.trim()
+      : '';
+  $('advanced-summary').textContent =
+    value === 'train'
+      ? '高级设置 · 线路来源、途经站与手动坐标'
+      : '高级设置 · 手动坐标';
+  $('lookup-hint').textContent =
+    value === 'train'
+      ? `${label ? `线路来源：${label}，可在高级设置中更改。` : ''}中途上车时填写实际上下车站，跨日会自动复核始发日期。`
+      : '填写实际起飞日期；没有当日信息时会提供明确标注的参考时刻，机场不会被静默替换。';
+}
 export function setMode(value) {
   const radio = document.querySelector(`input[name="mode"][value="${value}"]`);
   if (radio) radio.checked = true;
@@ -119,10 +134,7 @@ export function setMode(value) {
   $('train-candidates').classList.add('hidden');
   $('lookup').innerHTML =
     value === 'train' ? '自动匹配停站与时刻' : '自动匹配机场与时刻';
-  $('lookup-hint').textContent =
-    value === 'train'
-      ? '填写实际乘车日期与上下车站；中途跨日会自动复核一次始发日期。时刻和线路缺失时可先保存。'
-      : '填写实际起飞日期；没有当日信息时会提供明确标注的参考时刻，机场不会被静默替换。';
+  updateSourceHints(value);
   $('trip-number').placeholder =
     value === 'train' ? '例如 G813' : '例如 CA1831';
   $('trip-from').placeholder = value === 'train' ? '天津南' : '南京禄口 / NKG';
@@ -160,6 +172,7 @@ function populateSingle() {
     single.draft.provider || state.preferences?.railProvider,
     $('trip-provider-hint'),
   );
+  updateSourceHints();
   for (const [key, id] of Object.entries(ids)) {
     $(id).value = single.draft[key] || '';
     $(id).title = `来源：${fieldSourceLabel(single.draft, key)}`;
@@ -475,6 +488,7 @@ function editField(key, value) {
       single.draft.provider,
       $('trip-provider-hint'),
     );
+    updateSourceHints();
   }
   for (const field of Object.values(ids))
     $(field).removeAttribute('aria-invalid');
@@ -868,7 +882,6 @@ window.addEventListener('pagehide', () => {
   editorSession.cancel();
   flushBatchDraft().catch(() => {});
 });
-$('about-button').onclick = () => $('about').showModal();
 document
   .querySelectorAll('[data-close]')
   .forEach(

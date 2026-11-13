@@ -253,10 +253,6 @@
             >出行日期<input name="date" id="trip-date" type="date" required
           /></label>
         </div>
-        <div id="single-provider-field">
-          <label>本次线路来源<select id="trip-provider"></select></label>
-          <p id="trip-provider-hint" class="field-hint"></p>
-        </div>
         <button type="button" id="lookup" class="secondary wide">
           自动查询停站与时刻
         </button>
@@ -315,7 +311,13 @@
           </p>
         </details>
         <details id="advanced-fields">
-          <summary>高级设置 · 途经点与手动坐标</summary>
+          <summary id="advanced-summary">
+            高级设置 · 线路来源、途经站与手动坐标
+          </summary>
+          <div id="single-provider-field">
+            <label>本次线路来源<select id="trip-provider"></select></label>
+            <p id="trip-provider-hint" class="field-hint"></p>
+          </div>
           <div id="train-extra">
             <label
               >途经站 <span class="optional">可补充或修改 · 按顺序</span
@@ -376,10 +378,13 @@
             aria-label="多行行程文本"
             placeholder="火车 G1 2027/1/8 北京南-上海虹桥&#10;飞机 CA1001 2027/1/10 北京首都-厦门高崎"
           ></textarea>
-          <p class="field-hint">
-            支持日期前后调换、斜杠日期、起止地点连字符，以及原来的六列格式。时间可省略，跨日可写“+1
-            01:20”。先匹配，再核对保存；暂时查不到的项目会保留，只需补充缺失信息。
-          </p>
+          <details class="hint-details">
+            <summary>支持的写法</summary>
+            <p class="field-hint">
+              日期可前后调换或使用斜杠，起止地点可用连字符连接，也支持原来的六列格式。时间可省略，跨日可写“+1
+              01:20”。暂时查不到的项目会保留，之后只需补充缺失信息。
+            </p>
+          </details>
           <div class="dialog-footer">
             <span class="field-hint">最多 20 段 · 此步不保存</span
             ><button id="save-batch" class="primary">自动匹配并预览</button>
@@ -427,62 +432,92 @@
         <h2 id="about-title">数据与说明</h2>
         <button class="close" data-close="about" aria-label="关闭">×</button>
       </div>
-      <section class="data-actions" aria-label="线路来源设置">
-        <h3>线路来源</h3>
-        <label
-          >新查询的默认来源<select id="default-rail-provider"></select
-        ></label>
-        <p id="default-provider-hint" class="field-hint"></p>
-        <p class="field-hint">
-          偏好保存在本浏览器，可在单次或整批查询时临时切换。更换偏好不会改写已有线路。
-        </p>
-        <p id="provider-status" class="field-hint" role="status"></p>
-      </section>
-      <section class="data-actions" aria-label="备份与恢复">
-        <h3>我的本地数据</h3>
-        <p id="backup-date" class="field-hint">尚未导出备份</p>
-        <label class="check-label"
-          ><input
-            id="backup-drafts"
-            type="checkbox"
-            checked
-          />备份包含草稿</label
+      <div class="input-tabs" role="tablist" aria-label="数据与说明">
+        <button
+          id="about-data-tab"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          aria-controls="about-data"
+          class="active"
         >
-        <div class="action-row">
-          <button id="export-backup" class="primary">导出完整备份</button
-          ><label class="secondary file-button"
-            >导入备份<input
-              id="import-backup"
-              type="file"
-              accept=".json,application/json" /></label
-          ><button id="review-legacy" class="secondary hidden" type="button">
-            核对旧页面修改</button
-          ><button id="export-rescue" class="secondary">
-            导出原始恢复材料
-          </button>
-        </div>
-        <div id="data-status" class="form-status hidden" role="status"></div>
-        <button id="refresh-routes" class="text-button" disabled>
-          检查未固定线路
+          设置与数据</button
+        ><button
+          id="about-sources-tab"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="about-sources"
+          tabindex="-1"
+        >
+          来源与说明
         </button>
-        <p class="field-hint">
-          查询当前部署可用的线路来源；保留原日期与时刻，示意候选须在编辑时确认。
-        </p>
-        <details>
-          <summary>待继续的草稿</summary>
-          <div id="draft-list"></div>
-        </details>
-        <details>
-          <summary>本地查询诊断</summary>
-          <button id="refresh-diagnostics" class="text-button">读取状态</button>
-          <pre id="diagnostics" class="diagnostics">
-点击读取；不会自动请求外部数据源。</pre>
-          <button id="copy-diagnostics" class="text-button">
-            复制诊断摘要
+      </div>
+      <div id="about-data" role="tabpanel" aria-labelledby="about-data-tab">
+        <section class="data-actions" aria-label="线路来源设置">
+          <h3>线路来源</h3>
+          <label
+            >新查询的默认来源<select id="default-rail-provider"></select
+          ></label>
+          <p id="default-provider-hint" class="field-hint"></p>
+          <p class="field-hint">
+            偏好保存在本浏览器，可在单次或整批查询时临时切换。更换偏好不会改写已有线路。
+          </p>
+          <p id="provider-status" class="field-hint" role="status"></p>
+        </section>
+        <section class="data-actions" aria-label="备份与恢复">
+          <h3>我的本地数据</h3>
+          <p id="backup-date" class="field-hint">尚未导出备份</p>
+          <label class="check-label"
+            ><input
+              id="backup-drafts"
+              type="checkbox"
+              checked
+            />备份包含草稿</label
+          >
+          <div class="action-row">
+            <button id="export-backup" class="primary">导出完整备份</button
+            ><label class="secondary file-button"
+              >导入备份<input
+                id="import-backup"
+                type="file"
+                accept=".json,application/json" /></label
+            ><button id="review-legacy" class="secondary hidden" type="button">
+              核对旧页面修改</button
+            ><button id="export-rescue" class="secondary">
+              导出原始恢复材料
+            </button>
+          </div>
+          <div id="data-status" class="form-status hidden" role="status"></div>
+          <button id="refresh-routes" class="text-button" disabled>
+            检查未固定线路
           </button>
-        </details>
-      </section>
-      <div class="about-copy">
+          <p class="field-hint">
+            查询当前部署可用的线路来源；保留原日期与时刻，示意候选须在编辑时确认。
+          </p>
+          <details>
+            <summary>待继续的草稿</summary>
+            <div id="draft-list"></div>
+          </details>
+          <details>
+            <summary>本地查询诊断</summary>
+            <button id="refresh-diagnostics" class="text-button">
+              读取状态
+            </button>
+            <pre id="diagnostics" class="diagnostics">
+点击读取；不会自动请求外部数据源。</pre>
+            <button id="copy-diagnostics" class="text-button">
+              复制诊断摘要
+            </button>
+          </details>
+        </section>
+      </div>
+      <div
+        id="about-sources"
+        class="about-copy hidden"
+        role="tabpanel"
+        aria-labelledby="about-sources-tab"
+      >
         <p>
           途映把车票、机票上的地点和时间，变成可回放的旅行故事。它不提供实时列车或飞机定位。
         </p>

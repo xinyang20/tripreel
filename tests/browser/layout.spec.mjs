@@ -134,3 +134,43 @@ test.describe('触屏窄屏', () => {
     expect(await cooperative()).toBe(true);
   });
 });
+
+test('数据与说明分为两个标签页，每次打开回到设置与数据', async ({ page }) => {
+  await ready(page);
+  await page.locator('#about-button').click();
+  await expect(page.locator('#about-data')).toBeVisible();
+  await expect(page.locator('#about-sources')).toBeHidden();
+  await page.locator('#about-sources-tab').click();
+  await expect(page.locator('#about-sources')).toBeVisible();
+  await expect(page.locator('#about-data')).toBeHidden();
+  await expect(page.locator('#about-sources-tab')).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#about-data-tab')).toBeFocused();
+  await expect(page.locator('#about-data')).toBeVisible();
+  await page.locator('#about-sources-tab').click();
+  await page.locator('[data-close="about"]').click();
+  await page.locator('#about-button').click();
+  await expect(page.locator('#about-data')).toBeVisible();
+  await expect(page.locator('#about-data-tab')).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+});
+
+test('线路来源收进高级设置，查询提示显示当前来源', async ({ page }) => {
+  await ready(page);
+  await page.locator('#add-trip').click();
+  await expect(page.locator('#trip-provider')).toBeHidden();
+  await expect(page.locator('#lookup-hint')).toContainText('线路来源：');
+  await expect(page.locator('#advanced-summary')).toContainText('线路来源');
+  await page.locator('#advanced-fields > summary').click();
+  await expect(page.locator('#trip-provider')).toBeVisible();
+  await page.locator('input[name="mode"][value="flight"]').check();
+  await expect(page.locator('#advanced-summary')).toHaveText(
+    '高级设置 · 手动坐标',
+  );
+  await expect(page.locator('#lookup-hint')).not.toContainText('线路来源');
+});

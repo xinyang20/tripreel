@@ -41,7 +41,14 @@ test('默认来源持久化，单次覆盖不改变默认，切换保留手动�
   await expect(page.locator('#default-rail-provider')).toHaveValue('osm-local');
   await page.locator('#add-trip').click();
   await expect(page.locator('#trip-provider')).toHaveValue('osm-local');
+  await expect(page.locator('#lookup-hint')).toContainText(
+    '线路来源：OSM 本地线路参考',
+  );
+  await page.locator('#advanced-fields > summary').click();
   await page.locator('#trip-provider').selectOption('railgo');
+  await expect(page.locator('#lookup-hint')).toContainText(
+    '线路来源：RailGo（仅本机）',
+  );
   await page.locator('#trip-number').fill('G9001');
   await page.locator('#trip-date').fill('2030-01-01');
   await page.locator('#trip-from').fill('天津南');

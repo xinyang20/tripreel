@@ -206,7 +206,36 @@ function drawRestore() {
     )
     .join('');
 }
+const aboutTabs = [
+  ['about-data-tab', 'about-data'],
+  ['about-sources-tab', 'about-sources'],
+];
+function showAboutTab(id) {
+  for (const [tab, panel] of aboutTabs) {
+    const on = tab === id;
+    $(tab).classList.toggle('active', on);
+    $(tab).setAttribute('aria-selected', String(on));
+    $(tab).tabIndex = on ? 0 : -1;
+    $(panel).classList.toggle('hidden', !on);
+  }
+}
+function openAbout() {
+  showAboutTab('about-data-tab');
+  $('about').showModal();
+}
 export function setupLibraryUI({ filters, render }) {
+  $('about-button').onclick = openAbout;
+  for (const [tab] of aboutTabs) $(tab).onclick = () => showAboutTab(tab);
+  $('about-data-tab').parentElement.onkeydown = (event) => {
+    const index = aboutTabs.findIndex(([tab]) => tab === event.target.id);
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+    if (index < 0 || !step) return;
+    event.preventDefault();
+    const [next] =
+      aboutTabs[(index + step + aboutTabs.length) % aboutTabs.length];
+    showAboutTab(next);
+    $(next).focus();
+  };
   document.addEventListener('draft-change', () => renderLibraryUI(filters));
   for (const key of Object.keys(filters))
     $('filter-' + key).addEventListener(
@@ -288,7 +317,7 @@ export function setupLibraryUI({ filters, render }) {
     }
   };
   $('open-drafts').onclick = () => {
-    $('about').showModal();
+    openAbout();
     $('draft-list').closest('details').open = true;
   };
   $('draft-list').onclick = async (event) => {

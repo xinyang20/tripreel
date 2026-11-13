@@ -1165,6 +1165,15 @@ textarea {
 #advanced-fields {
   margin: 14px 0;
 }
+#single-provider-field {
+  margin-top: 12px;
+}
+.hint-details {
+  margin: 0 0 10px;
+}
+.hint-details > .field-hint {
+  margin: 6px 9px 0;
+}
 #time-details .form-row {
   margin-top: 14px;
 }
@@ -1467,6 +1476,13 @@ details.batch-row[open] > summary::after {
 }
 .data-actions h3 {
   margin-top: 2px;
+}
+#about-data > .data-actions:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+#about-sources > p:first-child {
+  margin-top: 0;
 }
 .diagnostics {
   white-space: pre-wrap;
