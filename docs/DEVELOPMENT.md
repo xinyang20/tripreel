@@ -55,7 +55,8 @@ tripreel/
 | `rail-providers.js`                                        | 来源能力、默认／临时选择、版本及草稿查询缓存约束             |
 | `performance.js`                                           | 显式启用的有界分段计时                                       |
 | `html.js`                                                  | 默认转义的界面标记模板 `safe`、可信片段 `raw` 和 `esc`       |
-| `map*.js` / `camera-fit.js` / `replay.js`                  | 共享几何、地名、取景、自由视角和回放                         |
+| `map*.js` / `camera-fit.js` / `replay.js`                  | 共享几何、地名、取景、自由视角、已行驶路线和回放节奏         |
+| `vehicles.js`                                              | 三维列车和飞机模型、姿态计算与绘制                           |
 | `video-options.js` / `video-export.js` / `video-layout.js` | 导出范围、预算、隐私呈现、编码、遮挡避让与资源释放           |
 | `server.mjs` / `scripts/request-scheduler.mjs`             | 固定来源查询、预算、共享请求、取消、缓存及队列               |
 | `scripts/rail-*.mjs` / `scripts/train-reference.mjs`       | 铁路几何与区间校验、停站示意及参考日期                       |
@@ -64,6 +65,8 @@ tripreel/
 `controls.css` 在布局样式之后加载，覆盖静态及动态生成的原生控件。下拉框用 `appearance: base-select` 渐进增强展开菜单与选中标识，保留浏览器的键盘、表单及可访问性语义；不支持此能力的浏览器保留统一的闭合外观和系统选项菜单，参见 [MDN 可定制下拉框](https://developer.mozilla.org/en-US/docs/Learn_web_development/Extensions/Forms/Customizable_select)。日期、时间、地点建议和视频播放仍使用浏览器原有交互。维护时同时检查禁用、错误、键盘焦点、窄屏及强制颜色模式，基础输入样式用低特异性选择器，避免覆盖状态反馈。
 
 `styles.css` 开头的 `:root` 定义表面、边框、文字、操作、飞行、状态颜色和字号、圆角、阴影变量，`controls.css` 引用同一套变量。文件按基础元素、通用组件、顶栏、行程列表与卡片、地图、回放、弹窗、编辑器、批量录入、数据与详情、视频、线路更新提示分段，响应式规则集中在末尾的 1500px、1050px、760px 三个媒体查询中。中文文字不小于 12px，说明文字使用 `--muted` 或更深的颜色。地图取景和地名避让读取标题、工具栏、回放栏和图例的实际位置，调整这些元素的布局后需复核取景。
+
+回放节奏由 `replay.js` 计算：有完整线路的列车按时刻表在已匹配线路的经停站停留，进出站按加减速曲线行驶；未匹配、缺时刻或时序错乱的经停站被忽略，不切断线路也不推断停站。飞机在起降段加减速。`tripPosition` 返回 `track`（线路索引和已行驶公里数）或 `arc`（弧线与已飞比例）。`vehicles.js` 据此生成六节车厢沿线路排列的列车和按航向、爬升角摆放的飞机，低缩放时按屏幕最小尺寸放大并加宽车身，放大到真实尺寸后恢复比例；模型以米为单位、相对载具位置绘制，深度范围围绕载具重新分配，几何沿 y 轴镜像以抵消地图投影的镜像。`map-scene.js` 的 `setReplayFrame` 把同一帧交给主地图和视频地图，并用 `line-gradient` 与加粗弧线显示已行驶部分；`#map` 的 `data-vehicle`、`data-travelled` 仅供回归检查。
 
 提示信息 `#toast` 是 `popover="manual"` 元素，每次显示都重新进入浏览器顶层，弹窗打开时仍可见；不支持 popover 的浏览器只切换隐藏样式。触屏设备在页面内启用 MapLibre `cooperativeGestures`，地图全屏时关闭；窄屏加载地图后收起紧凑版权栏。用 `innerHTML` 生成标记时使用 `html.js` 的 `safe` 模板，插值默认转义，嵌套的 `safe` 片段和数组不重复转义，`null`、`undefined`、`false` 不输出；需要比较或缓存的标记先转成字符串。
 
