@@ -2,7 +2,6 @@ import {
   $,
   state,
   api,
-  esc,
   status,
   saveTrips,
   saveDraft,
@@ -10,6 +9,7 @@ import {
   toast,
 } from './store.js';
 import { chinaToday } from './core.js';
+import { safe } from './html.js';
 import { normalizeTrip, validateRecord, canRenderRoute } from './domain.js';
 import { validateDraft } from './draft-validation.js';
 import {
@@ -132,21 +132,19 @@ export function setMode(value) {
   $('train-extra').classList.toggle('hidden', value !== 'train');
   $('single-provider-field').classList.toggle('hidden', value !== 'train');
   $('train-candidates').classList.add('hidden');
-  $('lookup').innerHTML =
+  $('lookup').textContent =
     value === 'train' ? '自动匹配停站与时刻' : '自动匹配机场与时刻';
   updateSourceHints(value);
   $('trip-number').placeholder =
     value === 'train' ? '例如 G813' : '例如 CA1831';
   $('trip-from').placeholder = value === 'train' ? '天津南' : '南京禄口 / NKG';
   $('trip-to').placeholder = value === 'train' ? '南京南' : '成都双流 / CTU';
-  $('place-list').innerHTML = (
-    value === 'train' ? state.stations : state.airports
-  )
-    .map(
-      (place) =>
-        `<option value="${esc(place.name)}">${esc(place.code)}</option>`,
-    )
-    .join('');
+  $('place-list').innerHTML = safe`${(value === 'train'
+    ? state.stations
+    : state.airports
+  ).map(
+    (place) => safe`<option value="${place.name}">${place.code}</option>`,
+  )}`;
 }
 function tabs(batch) {
   currentKind = batch ? 'batch' : 'single';
@@ -194,12 +192,10 @@ function showTrainCandidates() {
     ['boarding-stop', 'departure', single.draft.fromStopIndex],
     ['alighting-stop', 'arrival', single.draft.toStopIndex],
   ]) {
-    $(id).innerHTML = data.stops
-      .map(
-        (stop, index) =>
-          `<option value="${index}">${index + 1}. ${esc(stop.name)} · ${esc(stop[field]?.replace('T', ' ') || '')}</option>`,
-      )
-      .join('');
+    $(id).innerHTML = safe`${data.stops.map(
+      (stop, index) =>
+        safe`<option value="${index}">${index + 1}. ${stop.name} · ${stop[field]?.replace('T', ' ') || ''}</option>`,
+    )}`;
     if (Number.isInteger(selected)) $(id).value = String(selected);
   }
 }
@@ -208,7 +204,7 @@ function renderSingleReview() {
   const review = $('single-review');
   review.replaceChildren();
   if (single.warnings?.length)
-    review.innerHTML += `<ul class="batch-warnings">${[...new Set(single.warnings)].map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul>`;
+    review.innerHTML += safe`<ul class="batch-warnings">${[...new Set(single.warnings)].map((warning) => safe`<li>${warning}</li>`)}</ul>`;
   if (single.routeIsCandidate && original && canRenderRoute(original)) {
     review.innerHTML += '<p class="field-hint">当前已确认线路</p>';
     review.innerHTML += routePreviewMarkup(original, single.draft.mode);
@@ -218,12 +214,12 @@ function renderSingleReview() {
   if (single.route)
     review.innerHTML += routePreviewMarkup(single.route, single.draft.mode);
   if (single.candidates?.length)
-    review.innerHTML += `<label>选择运行区间<select id="single-candidate"><option value="">尚未选择，可先保存为待补全</option>${single.candidates.map((candidate, index) => `<option value="${index}">${esc(candidate.label)}</option>`).join('')}<option value="manual">保留原起止地点，手动核对时刻</option></select></label>`;
+    review.innerHTML += safe`<label>选择运行区间<select id="single-candidate"><option value="">尚未选择，可先保存为待补全</option>${single.candidates.map((candidate, index) => safe`<option value="${index}">${candidate.label}</option>`)}<option value="manual">保留原起止地点，手动核对时刻</option></select></label>`;
   if (hasReferenceFields(single.draft, single.lookup))
-    review.innerHTML += `<label class="batch-accept"><input id="single-reference-accept" type="checkbox" ${single.referenceAccepted ? 'checked' : ''}>我已核对参考日期与时刻</label>`;
+    review.innerHTML += safe`<label class="batch-accept"><input id="single-reference-accept" type="checkbox" ${single.referenceAccepted ? 'checked' : ''}>我已核对参考日期与时刻</label>`;
   if (single.routeIsCandidate && needsRouteConfirmation(single.route))
-    review.innerHTML += `<label class="batch-accept"><input id="single-route-confirm" type="checkbox" ${single.routeCandidateAccepted ? 'checked' : ''}>${single.route?.routeProvider === 'osm-local' && single.route?.quality === 'corridor' ? '接受此 OSM 线路参考（不代表乘车当日实际轨迹）' : '接受此候选示意线路（不是已核实的真实轨道）'}</label>`;
-  review.innerHTML += `<p class="field-hint">${esc(single.message || '地点和日期确认后即可保存；时刻、坐标或路线可稍后补全。')}</p>`;
+    review.innerHTML += safe`<label class="batch-accept"><input id="single-route-confirm" type="checkbox" ${single.routeCandidateAccepted ? 'checked' : ''}>${single.route?.routeProvider === 'osm-local' && single.route?.quality === 'corridor' ? '接受此 OSM 线路参考（不代表乘车当日实际轨迹）' : '接受此候选示意线路（不是已核实的真实轨道）'}</label>`;
+  review.innerHTML += safe`<p class="field-hint">${single.message || '地点和日期确认后即可保存；时刻、坐标或路线可稍后补全。'}</p>`;
   renderConflict(review);
   if ($('single-reference-accept'))
     $('single-reference-accept').onchange = (event) => {
@@ -276,7 +272,7 @@ function renderConflict(review) {
   const display = (value) =>
     ({ train: '火车', flight: '飞机' })[value] || value || '未填写';
   const differences = editorConflictDifferences(single, current);
-  review.innerHTML += `<section id="single-conflict" role="region" aria-labelledby="conflict-title"><h3 id="conflict-title">${current ? '行程已有新版本，请核对差异' : '原行程已被删除'}</h3><p>${current ? `本次编辑基于版本 ${esc(baseTripRevision)}，数据库当前版本 ${esc(current.revision)}。只合并你修改的字段；其他字段和后台更新的路线保留最新版本。` : '本页输入仍保留为草稿，不会自动重新建立已删除的行程。'}</p><div style="overflow-x:auto"><table><thead><tr><th>字段</th><th>本次草稿</th><th>数据库当前</th>${merged ? '<th>确认后保存</th>' : ''}</tr></thead><tbody>${differences.map((item) => `<tr><th scope="row">${esc(item.label)}</th><td>${esc(display(item.draft))}</td><td>${esc(display(item.current))}</td>${merged ? `<td>${esc(display(merged.draft[item.key]))}</td>` : ''}</tr>`).join('')}<tr><th scope="row">路线版本</th><td>${esc(original?.routeRevision ?? 0)}</td><td>${current ? esc(current.routeRevision) : '已删除'}</td>${merged ? `<td>${merged.route ? '保留数据库最新路线' : '待重新匹配'}</td>` : ''}</tr></tbody></table></div>${single.conflict.message ? `<p class="field-hint">${esc(single.conflict.message)}</p>` : ''}<div class="batch-row-actions">${current ? '<button id="conflict-load-latest" type="button">采用数据库版本</button><button id="conflict-confirm" type="button">确认差异并保存本次修改</button>' : ''}<button id="conflict-keep-draft" type="button">保留草稿，关闭</button></div></section>`;
+  review.innerHTML += safe`<section id="single-conflict" role="region" aria-labelledby="conflict-title"><h3 id="conflict-title">${current ? '行程已有新版本，请核对差异' : '原行程已被删除'}</h3><p>${current ? `本次编辑基于版本 ${baseTripRevision}，数据库当前版本 ${current.revision}。只合并你修改的字段；其他字段和后台更新的路线保留最新版本。` : '本页输入仍保留为草稿，不会自动重新建立已删除的行程。'}</p><div style="overflow-x:auto"><table><thead><tr><th>字段</th><th>本次草稿</th><th>数据库当前</th>${merged && safe`<th>确认后保存</th>`}</tr></thead><tbody>${differences.map((item) => safe`<tr><th scope="row">${item.label}</th><td>${display(item.draft)}</td><td>${display(item.current)}</td>${merged && safe`<td>${display(merged.draft[item.key])}</td>`}</tr>`)}<tr><th scope="row">路线版本</th><td>${original?.routeRevision ?? 0}</td><td>${current ? current.routeRevision : '已删除'}</td>${merged && safe`<td>${merged.route ? '保留数据库最新路线' : '待重新匹配'}</td>`}</tr></tbody></table></div>${single.conflict.message && safe`<p class="field-hint">${single.conflict.message}</p>`}<div class="batch-row-actions">${current && safe`<button id="conflict-load-latest" type="button">采用数据库版本</button><button id="conflict-confirm" type="button">确认差异并保存本次修改</button>`}<button id="conflict-keep-draft" type="button">保留草稿，关闭</button></div></section>`;
   $('save-trip').disabled = true;
   $('save-trip').textContent = '请先核对版本差异';
   if ($('conflict-confirm'))

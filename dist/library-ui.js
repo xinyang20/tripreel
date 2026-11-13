@@ -3,10 +3,12 @@ import { canReplay, routeLabel, tripIssues } from './domain.js';
 import { tripDate } from './selectors.js';
 import { resumeDraft } from './editor.js';
 import { validateDraft } from './draft-validation.js';
-const { $, state, esc, status, toast } = store;
+import { safe } from './html.js';
+const { $, state, status, toast } = store;
 let restorePreview, detailsId;
 const previousMarkup = new WeakMap();
-function updateMarkup(element, markup) {
+function updateMarkup(element, fragment) {
+  const markup = String(fragment);
   if (previousMarkup.get(element) === markup) return;
   element.innerHTML = markup;
   previousMarkup.set(element, markup);
@@ -42,7 +44,7 @@ function download(name, value, type = 'application/json') {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function options(groups, current = '', all = true) {
-  return `${all ? '<option value="">全部旅程</option><option value="ungrouped">未分组</option>' : '<option value="">移至未分组</option>'}${groups.map((g) => `<option value="${esc(g.id)}" ${g.id === current ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}`;
+  return safe`${all ? safe`<option value="">全部旅程</option><option value="ungrouped">未分组</option>` : safe`<option value="">移至未分组</option>`}${groups.map((g) => safe`<option value="${g.id}" ${g.id === current ? 'selected' : ''}>${g.name}</option>`)}`;
 }
 function draftCaption(draft) {
   const data = draft.payload || draft.data || draft;
@@ -68,8 +70,7 @@ export function renderLibraryUI(filters) {
     .reverse();
   updateMarkup(
     $('filter-year'),
-    '<option value="">全部年份</option>' +
-      years.map((y) => `<option value="${esc(y)}">${esc(y)}</option>`).join(''),
+    safe`<option value="">全部年份</option>${years.map((y) => safe`<option value="${y}">${y}</option>`)}`,
   );
   for (const key of ['year', 'from', 'to', 'mode', 'search'])
     if (document.activeElement !== $('filter-' + key))
@@ -83,13 +84,11 @@ export function renderLibraryUI(filters) {
   updateMarkup(
     $('draft-list'),
     drafts.length
-      ? drafts
-          .map(
-            (d) =>
-              `<div class="draft-item"><span>${esc(draftCaption(d))}<small>${esc(dateCaption(d.updatedAt))}</small></span><button class="text-button" data-resume="${esc(d.id)}">继续</button><button class="text-button" data-discard="${esc(d.id)}">丢弃</button></div>`,
-          )
-          .join('')
-      : '<p class="field-hint">没有待继续的草稿。</p>',
+      ? drafts.map(
+          (d) =>
+            safe`<div class="draft-item"><span>${draftCaption(d)}<small>${dateCaption(d.updatedAt)}</small></span><button class="text-button" data-resume="${d.id}">继续</button><button class="text-button" data-discard="${d.id}">丢弃</button></div>`,
+        )
+      : safe`<p class="field-hint">没有待继续的草稿。</p>`,
   );
   $('bulk-toolbar').classList.toggle(
     'hidden',
@@ -114,13 +113,12 @@ export function renderLibraryUI(filters) {
     groupCounts.set(trip.groupId, (groupCounts.get(trip.groupId) || 0) + 1);
   updateMarkup(
     $('group-list'),
-    groups
-      .map(
-        (g) =>
-          `<form class="group-item" data-group="${esc(g.id)}"><input aria-label="旅程名称" maxlength="60" required value="${esc(g.name)}"/><span>${groupCounts.get(g.id) || 0} 段</span><button class="text-button" type="submit">重命名</button><button class="text-button" type="button" data-remove-group="${esc(g.id)}">解散分组</button></form>`,
-      )
-      .join('') ||
-      '<p class="field-hint">创建命名旅程后，可勾选行程批量归组。</p>',
+    groups.length
+      ? groups.map(
+          (g) =>
+            safe`<form class="group-item" data-group="${g.id}"><input aria-label="旅程名称" maxlength="60" required value="${g.name}"/><span>${groupCounts.get(g.id) || 0} 段</span><button class="text-button" type="submit">重命名</button><button class="text-button" type="button" data-remove-group="${g.id}">解散分组</button></form>`,
+        )
+      : safe`<p class="field-hint">创建命名旅程后，可勾选行程批量归组。</p>`,
   );
   for (const id of ['group-name'])
     $(id).disabled = state.locked || !state.ready;
@@ -147,10 +145,10 @@ export function showTripDetails(trip) {
     );
   };
   $('details-body').innerHTML =
-    `<dl class="trip-facts">${['from', 'to'].map((field) => `<dt>${field === 'from' ? '出发地点' : '到达地点'}</dt><dd>${esc(trip[field].name)} · ${esc(fieldSource(field))}</dd>`).join('')}<dt>出行日期</dt><dd>${esc(tripDate(trip))}</dd><dt>出发时刻</dt><dd>${esc(dateCaption(trip.departure))} · ${esc(fieldSource('departure'))}</dd><dt>到达时刻</dt><dd>${esc(dateCaption(trip.arrival))} · ${esc(fieldSource('arrival'))}</dd><dt>回放状态</dt><dd>${canReplay(trip) ? '可以回放' : '待补全，暂不参与回放'}</dd><dt>查询始发日期</dt><dd>${esc(trip.queryDate || '未查询')}</dd><dt>时刻参考日期</dt><dd>${esc(trip.referenceDate || '无')}</dd><dt>线路</dt><dd>${esc(routeLabel(trip))}</dd><dt>线路来源</dt><dd>${esc(trip.routeSource || '尚未取得')}</dd><dt>线路取得时间</dt><dd>${esc(dateCaption(trip.routeFetchedAt))}</dd><dt>距离口径</dt><dd>${Number.isFinite(trip.distance) ? Math.round(trip.distance) + ' km · ' : ''}${trip.mode === 'flight' ? '机场间球面距离' : trip.quality?.includes('schematic') ? '停站示意曲线长度' : '铁路几何长度'}，均非实测里程</dd></dl>
-  ${issues.length ? `<ul class="issue-list">${issues.map((i) => `<li>${esc(typeof i === 'string' ? i : i.message)}</li>`).join('')}</ul>` : ''}
-  ${trip.lastRouteAttempt?.error ? `<p class="form-status">最近线路查询：${esc(trip.lastRouteAttempt.error)}</p>` : ''}
-  ${state.demo ? '' : `<label class="check-label"><input id="freeze-route" type="checkbox" ${trip.routeFrozen ? 'checked' : ''}/>固定当前线路版本</label><h3>保留的线路版本</h3><div class="route-history">${history.length ? history.map((h) => `<div>${esc(routeLabel(h))} · ${esc(dateCaption(h.routeFetchedAt || h.savedAt))}<button class="text-button" data-restore-route="${esc(h.id || h.versionId)}">恢复并固定</button></div>`).join('') : '<p class="field-hint">没有较早的不同线路版本。</p>'}</div>`}`;
+    safe`<dl class="trip-facts">${['from', 'to'].map((field) => safe`<dt>${field === 'from' ? '出发地点' : '到达地点'}</dt><dd>${trip[field].name} · ${fieldSource(field)}</dd>`)}<dt>出行日期</dt><dd>${tripDate(trip)}</dd><dt>出发时刻</dt><dd>${dateCaption(trip.departure)} · ${fieldSource('departure')}</dd><dt>到达时刻</dt><dd>${dateCaption(trip.arrival)} · ${fieldSource('arrival')}</dd><dt>回放状态</dt><dd>${canReplay(trip) ? '可以回放' : '待补全，暂不参与回放'}</dd><dt>查询始发日期</dt><dd>${trip.queryDate || '未查询'}</dd><dt>时刻参考日期</dt><dd>${trip.referenceDate || '无'}</dd><dt>线路</dt><dd>${routeLabel(trip)}</dd><dt>线路来源</dt><dd>${trip.routeSource || '尚未取得'}</dd><dt>线路取得时间</dt><dd>${dateCaption(trip.routeFetchedAt)}</dd><dt>距离口径</dt><dd>${Number.isFinite(trip.distance) ? Math.round(trip.distance) + ' km · ' : ''}${trip.mode === 'flight' ? '机场间球面距离' : trip.quality?.includes('schematic') ? '停站示意曲线长度' : '铁路几何长度'}，均非实测里程</dd></dl>
+  ${issues.length > 0 && safe`<ul class="issue-list">${issues.map((i) => safe`<li>${typeof i === 'string' ? i : i.message}</li>`)}</ul>`}
+  ${trip.lastRouteAttempt?.error && safe`<p class="form-status">最近线路查询：${trip.lastRouteAttempt.error}</p>`}
+  ${!state.demo && safe`<label class="check-label"><input id="freeze-route" type="checkbox" ${trip.routeFrozen ? 'checked' : ''}/>固定当前线路版本</label><h3>保留的线路版本</h3><div class="route-history">${history.length ? history.map((h) => safe`<div>${routeLabel(h)} · ${dateCaption(h.routeFetchedAt || h.savedAt)}<button class="text-button" data-restore-route="${h.id || h.versionId}">恢复并固定</button></div>`) : safe`<p class="field-hint">没有较早的不同线路版本。</p>`}</div>`}`;
   status('details-status', '');
   if (!$('trip-details').open) $('trip-details').showModal();
   if ($('freeze-route'))
@@ -187,24 +185,19 @@ function drawRestore() {
   $('restore-include-extras').checked = true;
   $('restore-summary').textContent =
     `${entries.filter((e) => e.kind === 'new').length} 条新增，${entries.filter((e) => e.kind === 'duplicate').length} 条重复，${entries.filter((e) => e.kind === 'conflict').length} 条冲突，${entries.filter((e) => e.kind === 'invalid').length} 条无效。${restorePreview.extraIssues?.length ? `另有 ${restorePreview.extraIssues.length} 份草稿无法继续，原内容将保存在恢复材料中。` : ''}`;
-  $('restore-rows').innerHTML = entries
-    .map((entry, index) => {
-      const t = entry.incoming || {},
-        label = {
-          new: '新增',
-          duplicate: '完全重复',
-          conflict: '内容冲突',
-          invalid: '无效',
-        }[entry.kind];
-      return `<div class="restore-row"><div><strong>${esc(t.number || '记录 ' + (index + 1))} · ${esc(label)}</strong><p>${esc(t.from?.name || '')} → ${esc(t.to?.name || '')} ${esc(tripDate(t))}</p>${entry.issues?.length ? `<small>${esc(entry.issues.map((i) => i.message || i).join('；'))}</small>` : ''}</div><select data-restore-key="${esc(entry.key)}" aria-label="处理 ${esc(t.number || '记录')}" ${['invalid', 'duplicate'].includes(entry.kind) ? 'disabled' : ''}><option value="skip">保留现有 / 跳过</option>${entry.kind === 'new' ? '<option value="add" selected>新增此记录</option>' : ''}${entry.kind === 'conflict' ? '<option value="replace">采用导入内容</option>' : ''}</select></div>`;
-    })
-    .join('');
-  $('restore-rows').innerHTML += (restorePreview.extraIssues || [])
-    .map(
-      (issue) =>
-        `<div class="restore-row"><div><strong>草稿 ${issue.index + 1} · 已隔离</strong><p>${esc(issue.message)}</p></div></div>`,
-    )
-    .join('');
+  $('restore-rows').innerHTML = safe`${entries.map((entry, index) => {
+    const t = entry.incoming || {},
+      label = {
+        new: '新增',
+        duplicate: '完全重复',
+        conflict: '内容冲突',
+        invalid: '无效',
+      }[entry.kind];
+    return safe`<div class="restore-row"><div><strong>${t.number || '记录 ' + (index + 1)} · ${label}</strong><p>${t.from?.name || ''} → ${t.to?.name || ''} ${tripDate(t)}</p>${entry.issues?.length > 0 && safe`<small>${entry.issues.map((i) => i.message || i).join('；')}</small>`}</div><select data-restore-key="${entry.key}" aria-label="处理 ${t.number || '记录'}" ${['invalid', 'duplicate'].includes(entry.kind) ? 'disabled' : ''}><option value="skip">保留现有 / 跳过</option>${entry.kind === 'new' && safe`<option value="add" selected>新增此记录</option>`}${entry.kind === 'conflict' && safe`<option value="replace">采用导入内容</option>`}</select></div>`;
+  })}${(restorePreview.extraIssues || []).map(
+    (issue) =>
+      safe`<div class="restore-row"><div><strong>草稿 ${issue.index + 1} · 已隔离</strong><p>${issue.message}</p></div></div>`,
+  )}`;
 }
 const aboutTabs = [
   ['about-data-tab', 'about-data'],

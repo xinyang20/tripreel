@@ -2,14 +2,7 @@ import { createRepository, LEGACY_KEY } from './repository.js';
 import { prepareReadOnlyTrip } from './domain.js';
 import { measureStage } from './performance.js';
 export const $ = (id) => document.getElementById(id);
-export const esc = (value) =>
-  String(value ?? '').replace(
-    /[&<>"']/g,
-    (c) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[
-        c
-      ],
-  );
+export { esc } from './html.js';
 export const state = {
   trips: [],
   saved: [],

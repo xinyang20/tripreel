@@ -174,3 +174,43 @@ test('线路来源收进高级设置，查询提示显示当前来源', async ({
   );
   await expect(page.locator('#lookup-hint')).not.toContainText('线路来源');
 });
+
+test('列表、详情和批量核对中的文本按纯文本显示', async ({ page }) => {
+  await ready(page);
+  const name = '北京<img src=x onerror="window.__injected=1">';
+  await page.evaluate(async (name) => {
+    const store = await import('/store.js');
+    await store.saveTrips([
+      {
+        id: 'escaped',
+        mode: 'flight',
+        number: 'CA1001',
+        travelDate: '2027-01-01',
+        departure: '2027-01-01T08:00',
+        arrival: '2027-01-01T10:00',
+        from: { name, code: 'PEK', coord: [116.6, 40.08] },
+        to: { name: '厦门高崎', code: 'XMN', coord: [118.12, 24.54] },
+        quality: 'schematic',
+        distance: 1700,
+        routeState: 'ready',
+        routeConfirmed: true,
+        stops: [],
+        legs: [],
+        revision: 0,
+      },
+    ]);
+  }, name);
+  await expect(page.locator('.card-route')).toContainText(name);
+  await page.locator('[data-detail]').click();
+  await expect(page.locator('#details-body')).toContainText(name);
+  await page.locator('[data-close="trip-details"]').click();
+  await page.locator('#import-text').click();
+  await page
+    .locator('#batch-text')
+    .fill(`飞机 CA1002 2027/1/9 ${name}-厦门高崎`);
+  await page.locator('#save-batch').click();
+  await expect(page.locator('#batch-review')).toBeVisible({ timeout: 60000 });
+  await expect(page.locator('.batch-original').first()).toContainText(name);
+  expect(await page.locator('img[src="x"]').count()).toBe(0);
+  expect(await page.evaluate(() => window.__injected)).toBeUndefined();
+});

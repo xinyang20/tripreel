@@ -1,14 +1,6 @@
-import {
-  $,
-  state,
-  api,
-  esc,
-  status,
-  saveTrips,
-  saveDraft,
-  toast,
-} from './store.js';
+import { $, state, api, status, saveTrips, saveDraft, toast } from './store.js';
 import { parseBatchLines, chinaToday } from './core.js';
+import { safe } from './html.js';
 import { validateRecord } from './domain.js';
 import { resolveBatchDraft } from './batch-resolver.js';
 import { sameJourney, routeRequest, routeKey } from './batch-review.js';
@@ -154,7 +146,7 @@ export async function flushBatchDraft() {
 }
 
 const field = (row, key, label, type = 'text') =>
-  `<label>${label}<input data-field="${key}" type="${type}" value="${esc(row.draft[key] || '')}" ${['from', 'to'].includes(key) ? 'list="batch-places"' : ''} aria-label="第 ${row.line} 行 ${label}" title="来源：${esc(fieldSourceLabel(row.draft, key))}"><small class="field-origin">${esc(fieldSourceLabel(row.draft, key))}</small></label>`;
+  safe`<label>${label}<input data-field="${key}" type="${type}" value="${row.draft[key] || ''}" ${['from', 'to'].includes(key) && safe`list="batch-places"`} aria-label="第 ${row.line} 行 ${label}" title="来源：${fieldSourceLabel(row.draft, key)}"><small class="field-origin">${fieldSourceLabel(row.draft, key)}</small></label>`;
 function rowPending(row) {
   return (
     missingFields(row.draft).length > 0 ||
@@ -208,24 +200,24 @@ function renderRow(row) {
     title = draft
       ? `${draft.mode === 'train' ? '🚄' : '✈'} ${draft.number}`
       : '待修正文本';
-  details.innerHTML = `<summary><label><input data-include type="checkbox" ${row.included ? 'checked' : ''} aria-label="选择第 ${row.line} 行">${esc(title)}</label><span class="batch-route-summary">${draft ? `${esc(draft.date || '')} · ${esc(draft.from || '起点待补')} → ${esc(draft.to || '终点待补')}` : `第 ${row.line} 行`}</span><span class="batch-state">${row.duplicate ? '重复' : row.running ? '匹配中' : rowPending(row) ? '待补全' : row.reviewed ? '已核对' : rowNeedsReview(row) ? '需核对' : '可保存'}</span></summary><div class="batch-row-body"><span class="batch-original">${esc(row.raw)}</span><div class="batch-row-actions"><button type="button" data-retry>${draft ? '重新匹配' : '重新识别'}</button><button type="button" data-reviewed ${draft ? '' : 'disabled'}>${row.reviewed ? '重新核对' : '已完成核对'}</button></div></div>`;
+  details.innerHTML = safe`<summary><label><input data-include type="checkbox" ${row.included ? 'checked' : ''} aria-label="选择第 ${row.line} 行">${title}</label><span class="batch-route-summary">${draft ? `${draft.date || ''} · ${draft.from || '起点待补'} → ${draft.to || '终点待补'}` : `第 ${row.line} 行`}</span><span class="batch-state">${row.duplicate ? '重复' : row.running ? '匹配中' : rowPending(row) ? '待补全' : row.reviewed ? '已核对' : rowNeedsReview(row) ? '需核对' : '可保存'}</span></summary><div class="batch-row-body"><span class="batch-original">${row.raw}</span><div class="batch-row-actions"><button type="button" data-retry>${draft ? '重新匹配' : '重新识别'}</button><button type="button" data-reviewed ${draft ? '' : 'disabled'}>${row.reviewed ? '重新核对' : '已完成核对'}</button></div></div>`;
   const body = details.querySelector('.batch-row-body');
   if (draft) {
-    body.innerHTML += `<div class="batch-primary-fields"><label>方式<select data-field="mode" aria-label="第 ${row.line} 行 交通方式"><option value="train" ${draft.mode === 'train' ? 'selected' : ''}>火车</option><option value="flight" ${draft.mode === 'flight' ? 'selected' : ''}>飞机</option></select></label>${field(row, 'number', '编号')}${field(row, 'date', '实际乘车日期', 'date')}</div><div class="form-row">${field(row, 'from', '出发站 / 机场')}${field(row, 'to', '到达站 / 机场')}</div><div class="form-row">${field(row, 'departure', '出发时间（可稍后补）', 'datetime-local')}${field(row, 'arrival', '到达时间（可稍后补）', 'datetime-local')}</div>`;
+    body.innerHTML += safe`<div class="batch-primary-fields"><label>方式<select data-field="mode" aria-label="第 ${row.line} 行 交通方式"><option value="train" ${draft.mode === 'train' ? 'selected' : ''}>火车</option><option value="flight" ${draft.mode === 'flight' ? 'selected' : ''}>飞机</option></select></label>${field(row, 'number', '编号')}${field(row, 'date', '实际乘车日期', 'date')}</div><div class="form-row">${field(row, 'from', '出发站 / 机场')}${field(row, 'to', '到达站 / 机场')}</div><div class="form-row">${field(row, 'departure', '出发时间（可稍后补）', 'datetime-local')}${field(row, 'arrival', '到达时间（可稍后补）', 'datetime-local')}</div>`;
     if (row.candidates?.length)
-      body.innerHTML += `<label>可选运行区间<select data-candidate aria-label="第 ${row.line} 行 选择航段"><option value="">尚未选择，可先保存为待补全</option>${row.candidates.map((c, i) => `<option value="${i}">${esc(c.label)}</option>`).join('')}<option value="manual">保留原起止地点，时刻由我核对</option></select></label>`;
+      body.innerHTML += safe`<label>可选运行区间<select data-candidate aria-label="第 ${row.line} 行 选择航段"><option value="">尚未选择，可先保存为待补全</option>${row.candidates.map((c, i) => safe`<option value="${i}">${c.label}</option>`)}<option value="manual">保留原起止地点，时刻由我核对</option></select></label>`;
     if (hasReferenceFields(draft, row.lookup))
-      body.innerHTML += `<label class="batch-accept"><input data-reference type="checkbox" ${row.referenceAccepted ? 'checked' : ''}>我已核对参考日期与时刻</label>`;
+      body.innerHTML += safe`<label class="batch-accept"><input data-reference type="checkbox" ${row.referenceAccepted ? 'checked' : ''}>我已核对参考日期与时刻</label>`;
     if (needsRouteConfirmation(row.route))
-      body.innerHTML += `<label class="batch-accept"><input data-route-confirm type="checkbox" ${row.routeCandidateAccepted ? 'checked' : ''}>${row.route?.routeProvider === 'osm-local' && row.route?.quality === 'corridor' ? '接受此 OSM 线路参考（不代表乘车当日实际轨迹）' : '接受此候选示意线路（不是已核实的真实轨道）'}</label>`;
-    body.innerHTML += `<details class="batch-coordinates"><summary>调整坐标与途经站</summary><div class="form-row">${field(row, 'fromCoord', '出发地经度,纬度')}${field(row, 'toCoord', '目的地经度,纬度')}</div>${field(row, 'via', '途经站（用顿号分隔）')}</details>`;
+      body.innerHTML += safe`<label class="batch-accept"><input data-route-confirm type="checkbox" ${row.routeCandidateAccepted ? 'checked' : ''}>${row.route?.routeProvider === 'osm-local' && row.route?.quality === 'corridor' ? '接受此 OSM 线路参考（不代表乘车当日实际轨迹）' : '接受此候选示意线路（不是已核实的真实轨道）'}</label>`;
+    body.innerHTML += safe`<details class="batch-coordinates"><summary>调整坐标与途经站</summary><div class="form-row">${field(row, 'fromCoord', '出发地经度,纬度')}${field(row, 'toCoord', '目的地经度,纬度')}</div>${field(row, 'via', '途经站（用顿号分隔）')}</details>`;
   } else
-    body.innerHTML += `<textarea data-raw class="batch-raw-edit" aria-label="修正第 ${row.line} 行文本">${esc(row.raw)}</textarea>`;
+    body.innerHTML += safe`<textarea data-raw class="batch-raw-edit" aria-label="修正第 ${row.line} 行文本">${row.raw}</textarea>`;
   if (row.route)
     body.innerHTML += routePreviewMarkup(row.route, row.draft.mode);
   if (row.warnings?.length)
-    body.innerHTML += `<ul class="batch-warnings">${[...new Set(row.warnings)].map((w) => `<li>${esc(w)}</li>`).join('')}</ul>`;
-  body.innerHTML += `<div class="batch-row-status ${row.error ? 'error' : ''}" role="status">${esc(row.error || row.message || '核对后即可保存，缺失内容可稍后补全。')}</div>`;
+    body.innerHTML += safe`<ul class="batch-warnings">${[...new Set(row.warnings)].map((w) => safe`<li>${w}</li>`)}</ul>`;
+  body.innerHTML += safe`<div class="batch-row-status ${row.error ? 'error' : ''}" role="status">${row.error || row.message || '核对后即可保存，缺失内容可稍后补全。'}</div>`;
   if (running)
     details
       .querySelectorAll('input,select,textarea,button')
@@ -398,11 +390,9 @@ async function runMatching(targets) {
   try {
     await ensurePlaces(overall.signal);
     if (!editorSession.current(token)) return;
-    $('batch-places').innerHTML = [
+    $('batch-places').innerHTML = safe`${[
       ...new Set([...state.stations, ...state.airports].map((p) => p.name)),
-    ]
-      .map((name) => `<option value="${esc(name)}"></option>`)
-      .join('');
+    ].map((name) => safe`<option value="${name}"></option>`)}`;
     async function worker() {
       while (
         cursor < targets.length &&

@@ -6,12 +6,13 @@ import { openEditor, setMode, importText } from './editor.js';
 import { refreshStoredRoutes } from './routes.js';
 import { fillRailProviderSelect } from './rail-providers.js';
 import { measureStage } from './performance.js';
+import { safe } from './html.js';
 import {
   setupLibraryUI,
   renderLibraryUI,
   showTripDetails,
 } from './library-ui.js';
-const { $, state, api, esc, toast } = store;
+const { $, state, api, toast } = store;
 export const filters = {
   group: '',
   year: '',
@@ -78,12 +79,36 @@ async function loadCapabilities() {
       '火车：暂时无法确认本站线路查询能力，已暂停自动更新。可手动记录车次、日期、地点与时刻，已有线路和备份不受影响。';
   }
 }
+// Elements updated on every render are looked up once.
+const view = Object.fromEntries(
+  [
+    'trip-list',
+    'stat-count',
+    'stat-distance',
+    'stat-places',
+    'journey-caption',
+    'new-journey',
+    'map-title',
+    'map-subtitle',
+    'refresh-routes',
+    'progress-start',
+    'progress-end',
+    'play',
+    'restart',
+    'progress',
+    'export-video',
+    'add-trip',
+    'import-text',
+  ].map((id) => [id.replace(/-(\w)/g, (_, c) => c.toUpperCase()), $(id)]),
+);
 function renderCards(trips, source) {
-  const list = $('trip-list'),
+  const list = view.tripList,
     live = new Set(source.map((trip) => trip.id));
   for (const [id] of cardNodes) if (!live.has(id)) cardNodes.delete(id);
   if (!trips.length) {
-    const markup = `<div class="empty-state"><strong>${source.length ? '这个范围还没有行程' : '第一段旅程，从这里开始'}</strong><p>写出车次、日期与地点，时刻可以稍后补全。</p><div class="empty-actions"><button class="primary" data-empty-add>添加一段</button><button class="secondary" data-empty-paste>粘贴多段</button>${source.length || state.demo ? '' : '<button class="secondary" data-empty-demo>体验示例</button>'}</div><p class="format-example">火车 G1 2027/1/8 北京南-上海虹桥</p></div>`;
+    const markup = String(
+      safe`<div class="empty-state"><strong>${source.length ? '这个范围还没有行程' : '第一段旅程，从这里开始'}</strong><p>写出车次、日期与地点，时刻可以稍后补全。</p><div class="empty-actions"><button class="primary" data-empty-add>添加一段</button><button class="secondary" data-empty-paste>粘贴多段</button>${!source.length && !state.demo && safe`<button class="secondary" data-empty-demo>体验示例</button>`}</div><p class="format-example">火车 G1 2027/1/8 北京南-上海虹桥</p></div>`,
+    );
     if (list.innerHTML !== markup) list.innerHTML = markup;
     return;
   }
@@ -138,12 +163,12 @@ function card(trip) {
   const warning =
     !playable ||
     ['station-schematic', 'manual-schematic'].includes(trip.quality);
-  return `<article class="trip-card ${trip.mode === 'flight' ? 'flight' : ''} ${trip.id === state.selected ? 'selected' : ''}" data-trip="${esc(trip.id)}">
-    <div class="card-head">${state.demo ? '' : `<input type="checkbox" data-select="${esc(trip.id)}" aria-label="选择 ${esc(trip.number)} ${esc(date)}" ${state.selection.has(trip.id) ? 'checked' : ''}/>`}<span class="mode-icon" aria-hidden="true">${trip.mode === 'train' ? '🚄' : '✈️'}</span><strong>${esc(trip.number)}</strong><span class="card-date">${esc(date.slice(5).replace('-', ' / '))}</span></div>
-    <button class="card-view" data-view="${esc(trip.id)}" aria-label="查看 ${esc(trip.number)} ${esc(trip.from.name)} 至 ${esc(trip.to.name)}"><span class="card-route">${esc(trip.from.name)} <span>→</span> ${esc(trip.to.name)}</span><span class="card-time">${esc(times)}${trip.arrival && trip.arrival.slice(0, 10) !== date ? ` · 到达 ${esc(trip.arrival.slice(5, 10))}` : ''}</span></button>
-    <div class="station-summary">${esc(trip.isReference ? `${trip.referenceDate} 时刻参考` : trip.source || '已知行程信息')}${issues.length ? ` · ${issues.length} 项说明` : ''}</div>
-    <div class="card-meta"><span class="quality-badge ${warning ? 'warn' : ''}">${!playable ? '待补全 · ' : ''}${esc(routeLabel(trip))}</span><span class="card-actions"><button class="text-button" data-detail="${esc(trip.id)}">详情</button>${state.demo ? '' : `<button class="text-button" data-edit="${esc(trip.id)}" aria-label="编辑 ${esc(trip.number)}">编辑</button><button class="text-button" data-delete="${esc(trip.id)}" aria-label="删除 ${esc(trip.number)}">删除</button>`}</span></div>
-  </article>`;
+  return String(safe`<article class="trip-card ${trip.mode === 'flight' ? 'flight' : ''} ${trip.id === state.selected ? 'selected' : ''}" data-trip="${trip.id}">
+    <div class="card-head">${!state.demo && safe`<input type="checkbox" data-select="${trip.id}" aria-label="选择 ${trip.number} ${date}" ${state.selection.has(trip.id) ? 'checked' : ''}/>`}<span class="mode-icon" aria-hidden="true">${trip.mode === 'train' ? '🚄' : '✈️'}</span><strong>${trip.number}</strong><span class="card-date">${date.slice(5).replace('-', ' / ')}</span></div>
+    <button class="card-view" data-view="${trip.id}" aria-label="查看 ${trip.number} ${trip.from.name} 至 ${trip.to.name}"><span class="card-route">${trip.from.name} <span>→</span> ${trip.to.name}</span><span class="card-time">${times}${trip.arrival && trip.arrival.slice(0, 10) !== date ? ` · 到达 ${trip.arrival.slice(5, 10)}` : ''}</span></button>
+    <div class="station-summary">${trip.isReference ? `${trip.referenceDate} 时刻参考` : trip.source || '已知行程信息'}${issues.length ? ` · ${issues.length} 项说明` : ''}</div>
+    <div class="card-meta"><span class="quality-badge ${warning ? 'warn' : ''}">${!playable ? '待补全 · ' : ''}${routeLabel(trip)}</span><span class="card-actions"><button class="text-button" data-detail="${trip.id}">详情</button>${!state.demo && safe`<button class="text-button" data-edit="${trip.id}" aria-label="编辑 ${trip.number}">编辑</button><button class="text-button" data-delete="${trip.id}" aria-label="删除 ${trip.number}">删除</button>`}</span></div>
+  </article>`);
 }
 function synchronizeView() {
   if (!loaded) return;
@@ -171,36 +196,36 @@ function renderView() {
     trips = state.trips;
   const summary = measureStage('summary', () => scopeSummary(trips)),
     playable = trips.filter(canReplay);
-  $('stat-count').textContent = summary.count;
-  $('stat-distance').textContent =
+  view.statCount.textContent = summary.count;
+  view.statDistance.textContent =
     summary.count && summary.distance.unknown < summary.count
       ? Math.round(summary.totalDistance).toLocaleString()
       : '—';
-  $('stat-distance').title =
-    `铁路曲线 ${Math.round(summary.distance.rail)} km；停站示意 ${Math.round(summary.distance.schematic)} km；机场间距离 ${Math.round(summary.distance.flight)} km；${summary.distance.unknown} 段尚无里程`;
-  $('stat-places').textContent = summary.places;
-  $('journey-caption').textContent = state.demo
+  view.statDistance.title = `铁路曲线 ${Math.round(summary.distance.rail)} km；停站示意 ${Math.round(summary.distance.schematic)} km；机场间距离 ${Math.round(summary.distance.flight)} km；${summary.distance.unknown} 段尚无里程`;
+  view.statPlaces.textContent = summary.places;
+  view.journeyCaption.textContent = state.demo
     ? '示例旅程 · 未保存'
     : `当前范围 ${summary.count} 段 · ${summary.count - summary.playable} 段待补全`;
-  $('new-journey').classList.toggle('hidden', !state.demo);
+  view.newJourney.classList.toggle('hidden', !state.demo);
   measureStage('cards', () => renderCards(trips, source));
   const group = (state.groups || []).find((g) => g.id === filters.group);
-  $('map-title').textContent =
+  view.mapTitle.textContent =
     group?.name ||
     (trips.length
       ? `${trips[0].from.name}，到${trips.at(-1).to.name}`
       : '下一站，去哪里？');
-  $('map-subtitle').textContent = trips.length
+  view.mapSubtitle.textContent = trips.length
     ? `${tripDate(trips[0]).replaceAll('-', '.')} — ${(trips.at(-1).arrival?.slice(0, 10) || tripDate(trips.at(-1))).replaceAll('-', '.')} / ${trips.length} 段 · ${playable.length} 段可回放`
     : '添加行程，在地图上串起每一次出发。';
-  for (const id of ['play', 'restart', 'progress', 'export-video'])
-    $(id).disabled = !playable.length;
-  for (const id of ['add-trip', 'import-text']) $(id).disabled = !!state.locked;
-  $('refresh-routes').disabled =
+  for (const key of ['play', 'restart', 'progress', 'exportVideo'])
+    view[key].disabled = !playable.length;
+  for (const key of ['addTrip', 'importText'])
+    view[key].disabled = !!state.locked;
+  view.refreshRoutes.disabled =
     state.locked ||
     !state.saved.some((trip) => trip.mode === 'train' && !trip.routeFrozen);
-  $('progress-start').textContent = playable[0]?.from.name || '起点';
-  $('progress-end').textContent = playable.at(-1)?.to.name || '终点';
+  view.progressStart.textContent = playable[0]?.from.name || '起点';
+  view.progressEnd.textContent = playable.at(-1)?.to.name || '终点';
   measureStage('library', () => renderLibraryUI(filters));
   const signature = JSON.stringify(
     trips.map((t) => [
