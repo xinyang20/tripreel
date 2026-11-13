@@ -276,8 +276,8 @@ summary {
 }
 .toast {
   position: fixed;
-  left: 50%;
-  bottom: 24px;
+  inset: 15px auto auto 50%;
+  margin: 0;
   transform: translateX(-50%);
   border: 1px solid var(--border-accent);
   background: var(--raised);
@@ -886,7 +886,7 @@ h1 {
   justify-content: space-between;
   margin-bottom: 18px;
   gap: 16px;
-  padding-right: 26px;
+  padding-right: 40px;
 }
 .playback-top .eyebrow {
   font-size: var(--font-2xs);
@@ -1715,9 +1715,6 @@ details.batch-row[open] > summary::after {
   .playback-top strong {
     font-size: var(--font-md);
   }
-  .follow-label {
-    display: none;
-  }
 }
 @media (max-width: 760px) {
   body {
@@ -1974,6 +1971,12 @@ details.batch-row[open] > summary::after {
   .route-update-status {
     top: 76px;
     right: 16px;
+  }
+  .toast {
+    inset: auto auto calc(76px + env(safe-area-inset-bottom)) 50%;
+  }
+  .map-fullscreen .toast {
+    inset: 16px auto auto 50%;
   }
 }
 @media (prefers-reduced-motion: reduce) {

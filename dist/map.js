@@ -19,6 +19,8 @@ import {
 import { openVideoExport } from './video-export.js';
 import { selectedScope } from './selectors.js';
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const coarsePointer = matchMedia('(pointer: coarse)'),
+  narrowScreen = matchMedia('(max-width: 760px)');
 const cameraFits = createCameraFitCache();
 let labelFrame,
   labelKey = '',
@@ -56,9 +58,24 @@ try {
       'NavigationControl.ZoomOut': '缩小',
       'NavigationControl.ResetBearing': '恢复正北方向',
       'AttributionControl.ToggleAttribution': '数据来源',
+      'CooperativeGesturesHandler.WindowsHelpText':
+        '按住 Ctrl 并滚动以缩放地图',
+      'CooperativeGesturesHandler.MacHelpText': '按住 ⌘ 并滚动以缩放地图',
+      'CooperativeGesturesHandler.MobileHelpText': '使用双指移动地图',
     },
   });
   map.addControl(new ML.NavigationControl(), 'top-right');
+  // On touch screens the map sits inside a scrolling page, so one finger scrolls the page.
+  coarsePointer.addEventListener('change', syncGestures);
+  syncGestures();
+  // Narrow screens start with the compact attribution collapsed so it does not cover replay controls.
+  map.once('load', () => {
+    if (narrowScreen.matches)
+      map
+        .getContainer()
+        .querySelector('.maplibregl-compact-show')
+        ?.classList.remove('maplibregl-compact-show');
+  });
 } catch {
   $('map-notice').textContent =
     '无法启动三维地图，请启用硬件加速或换用 Chrome。行程仍可录入。';
@@ -422,8 +439,17 @@ $('fit-map').onclick = () => {
   fitMap();
   updateLabels();
 };
+function syncGestures() {
+  if (!map) return;
+  const cooperative =
+    coarsePointer.matches &&
+    !document.body.classList.contains('map-fullscreen');
+  if (cooperative) map.cooperativeGestures.enable();
+  else map.cooperativeGestures.disable();
+}
 function fullscreen(enabled) {
   document.body.classList.toggle('map-fullscreen', enabled);
+  syncGestures();
   const button = $('map-fullscreen');
   button.textContent = enabled ? '退出' : '全屏';
   button.title = enabled ? '退出地图全屏（Esc）' : '地图全屏';

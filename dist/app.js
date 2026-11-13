@@ -83,7 +83,7 @@ function renderCards(trips, source) {
     live = new Set(source.map((trip) => trip.id));
   for (const [id] of cardNodes) if (!live.has(id)) cardNodes.delete(id);
   if (!trips.length) {
-    const markup = `<div class="empty-state"><strong>${source.length ? '这个范围还没有行程' : '第一段旅程，从这里开始'}</strong><p>写出车次、日期与地点，时刻可以稍后补全。</p><div class="empty-actions"><button class="primary" data-empty-add>添加一段</button><button class="secondary" data-empty-paste>粘贴多段</button></div><p class="format-example">火车 G1 2027/1/8 北京南-上海虹桥</p></div>`;
+    const markup = `<div class="empty-state"><strong>${source.length ? '这个范围还没有行程' : '第一段旅程，从这里开始'}</strong><p>写出车次、日期与地点，时刻可以稍后补全。</p><div class="empty-actions"><button class="primary" data-empty-add>添加一段</button><button class="secondary" data-empty-paste>粘贴多段</button>${source.length || state.demo ? '' : '<button class="secondary" data-empty-demo>体验示例</button>'}</div><p class="format-example">火车 G1 2027/1/8 北京南-上海虹桥</p></div>`;
     if (list.innerHTML !== markup) list.innerHTML = markup;
     return;
   }
@@ -270,6 +270,7 @@ setupLibraryUI({ filters, render: scheduleRender });
 $('trip-list').onclick = (event) => {
   if (event.target.closest('[data-empty-add]')) return openEditor();
   if (event.target.closest('[data-empty-paste]')) return openEditor(true);
+  if (event.target.closest('[data-empty-demo]')) return loadDemo();
   const element = event.target.closest(
     '[data-edit],[data-delete],[data-detail],[data-view]',
   );
@@ -315,7 +316,7 @@ $('new-journey').onclick = () => {
   previousView = '';
   render();
 };
-$('demo-button').onclick = async () => {
+async function loadDemo() {
   $('demo-button').disabled = true;
   try {
     const demo = await api('/data/demo.json');
@@ -331,7 +332,8 @@ $('demo-button').onclick = async () => {
   } finally {
     $('demo-button').disabled = false;
   }
-};
+}
+$('demo-button').onclick = loadDemo;
 $('refresh-routes').onclick = async () => {
   $('about').close();
   try {

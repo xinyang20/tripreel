@@ -35,10 +35,19 @@ let timer, loadPromise;
 export function toast(text) {
   const element = $('toast');
   if (!element) return;
+  // A manual popover joins the top layer, so the message stays above open modal dialogs.
+  const popover = typeof element.showPopover === 'function';
   element.textContent = text;
   element.classList.remove('hidden');
+  if (popover) {
+    if (element.matches(':popover-open')) element.hidePopover();
+    element.showPopover();
+  }
   clearTimeout(timer);
-  timer = setTimeout(() => element.classList.add('hidden'), 5000);
+  timer = setTimeout(() => {
+    element.classList.add('hidden');
+    if (popover && element.matches(':popover-open')) element.hidePopover();
+  }, 5000);
 }
 export function status(id, text, error = false) {
   const element = $(id);
