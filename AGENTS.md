@@ -11,6 +11,8 @@
 - 面向个人的旅行记录网站，默认本机运行，也支持明确授权的受限公开模式，目前覆盖中国大陆火车、飞机行程。正式记录、草稿和分组保存在当前浏览器的 IndexedDB；没有账号、服务端数据库或云端同步。
 - 使用 Node.js HTTP 服务、原生 JavaScript ES modules、MapLibre GL 和 Three.js；没有 React、Vite、TypeScript 或独立前端编译流程。
 - 保持白色、浅蓝色界面，火车使用 🚄 或明确的列车图标。用户文案和说明使用简体中文，代码注释沿用所在模块惯例。
+- 颜色、字号、圆角和阴影使用 `styles.css` 开头 `:root` 中的变量，`controls.css` 引用同一套变量；不新增写死的颜色或字号。中文文字不小于 12px（`--font-2xs` 只用于大写英文装饰小标题），正文和说明文字使用 `--muted` 或更深的文字色，保证对白色和浅蓝面板的对比度不低于 4.5:1。新规则放进对应分段，窄屏规则写在文件末尾的同一个 760px 媒体查询中。
+- 用 `innerHTML` 生成标记时使用 `html.js` 的 `safe` 模板，插值默认转义；`raw` 只用于项目内可信函数生成的标记，不用于用户或远程文本。条件片段写成 `` cond && safe`…` ``，数量判断写 `length > 0`，避免输出 0。
 - 不把未实现的功能写成已有能力，不把参考时刻、示意曲线或最新线路描述成乘车当日的真实轨迹。
 
 ## 环境与命令
@@ -45,6 +47,7 @@
 | `dist/editor.js`、`batch-editor.js`、`editor-draft.js`、`editor-session.js`  | 单段/批量编辑、字段来源、候选确认、请求会话、草稿保存与冲突核对                   |
 | `dist/core.js`、`batch-resolver.js`、`batch-review.js`                       | 时间与坐标校验、文本解析、查询匹配、重复识别与路线请求                            |
 | `dist/domain.js`、`repository.js`、`store.js`                                | 正式记录模型、可绘制/可回放判断、IndexedDB 事务、迁移救援、版本检查与异步状态接口 |
+| `dist/html.js`                                                               | 默认转义的界面标记模板（`esc`、`safe`、`raw`）                                    |
 | `dist/draft-validation.js`                                                   | 恢复及继续草稿前的结构校验；不以正式记录完整性要求拒绝未完成输入                  |
 | `dist/routes.js`、`selectors.js`、`library-ui.js`                            | 安全后台刷新、分组/筛选、备份恢复、路线历史与数据管理界面                         |
 | `dist/map.js`、`map-scene.js`、`camera-fit.js`、`map-labels.js`、`replay.js` | 地图场景、三维取景、城市标签和回放                                                |

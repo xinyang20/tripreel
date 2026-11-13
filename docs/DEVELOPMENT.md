@@ -54,6 +54,7 @@ tripreel/
 | `routes.js`                                                | 后台线路刷新及版本保护，不修改用户时刻                       |
 | `rail-providers.js`                                        | 来源能力、默认／临时选择、版本及草稿查询缓存约束             |
 | `performance.js`                                           | 显式启用的有界分段计时                                       |
+| `html.js`                                                  | 默认转义的界面标记模板 `safe`、可信片段 `raw` 和 `esc`       |
 | `map*.js` / `camera-fit.js` / `replay.js`                  | 共享几何、地名、取景、自由视角和回放                         |
 | `video-options.js` / `video-export.js` / `video-layout.js` | 导出范围、预算、隐私呈现、编码、遮挡避让与资源释放           |
 | `server.mjs` / `scripts/request-scheduler.mjs`             | 固定来源查询、预算、共享请求、取消、缓存及队列               |
@@ -61,6 +62,10 @@ tripreel/
 | `scripts/import-rail-osm.mjs` / `scripts/rail-data/`       | OSM 原始关系、独立证据清单与显式离线导入                     |
 
 `controls.css` 在布局样式之后加载，覆盖静态及动态生成的原生控件。下拉框用 `appearance: base-select` 渐进增强展开菜单与选中标识，保留浏览器的键盘、表单及可访问性语义；不支持此能力的浏览器保留统一的闭合外观和系统选项菜单，参见 [MDN 可定制下拉框](https://developer.mozilla.org/en-US/docs/Learn_web_development/Extensions/Forms/Customizable_select)。日期、时间、地点建议和视频播放仍使用浏览器原有交互。维护时同时检查禁用、错误、键盘焦点、窄屏及强制颜色模式，基础输入样式用低特异性选择器，避免覆盖状态反馈。
+
+`styles.css` 开头的 `:root` 定义表面、边框、文字、操作、飞行、状态颜色和字号、圆角、阴影变量，`controls.css` 引用同一套变量。文件按基础元素、通用组件、顶栏、行程列表与卡片、地图、回放、弹窗、编辑器、批量录入、数据与详情、视频、线路更新提示分段，响应式规则集中在末尾的 1500px、1050px、760px 三个媒体查询中。中文文字不小于 12px，说明文字使用 `--muted` 或更深的颜色。地图取景和地名避让读取标题、工具栏、回放栏和图例的实际位置，调整这些元素的布局后需复核取景。
+
+提示信息 `#toast` 是 `popover="manual"` 元素，每次显示都重新进入浏览器顶层，弹窗打开时仍可见；不支持 popover 的浏览器只切换隐藏样式。触屏设备在页面内启用 MapLibre `cooperativeGestures`，地图全屏时关闭；窄屏加载地图后收起紧凑版权栏。用 `innerHTML` 生成标记时使用 `html.js` 的 `safe` 模板，插值默认转义，嵌套的 `safe` 片段和数组不重复转义，`null`、`undefined`、`false` 不输出；需要比较或缓存的标记先转成字符串。
 
 数据库仍使用 `travel-trace` v2，旧数据键 `travel-trace.v1` 和备份标识属于兼容性约定，不随品牌改名。正式记录、路线、草稿、分组和救援内容分别存储。所有页面存储操作经异步 `store.js` 调用，必须等待成功再关闭确认界面；并发版本检查在事务内执行。
 
