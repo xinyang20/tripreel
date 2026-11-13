@@ -6,7 +6,7 @@ import { openEditor, setMode, importText } from './editor.js';
 import { refreshStoredRoutes } from './routes.js';
 import { fillRailProviderSelect } from './rail-providers.js';
 import { measureStage } from './performance.js';
-import { safe } from './html.js';
+import { icon, safe } from './html.js';
 import {
   setupLibraryUI,
   renderLibraryUI,
@@ -164,7 +164,7 @@ function card(trip) {
     !playable ||
     ['station-schematic', 'manual-schematic'].includes(trip.quality);
   return String(safe`<article class="trip-card ${trip.mode === 'flight' ? 'flight' : ''} ${trip.id === state.selected ? 'selected' : ''}" data-trip="${trip.id}">
-    <div class="card-head">${!state.demo && safe`<input type="checkbox" data-select="${trip.id}" aria-label="选择 ${trip.number} ${date}" ${state.selection.has(trip.id) ? 'checked' : ''}/>`}<span class="mode-icon" aria-hidden="true">${trip.mode === 'train' ? '🚄' : '✈️'}</span><strong>${trip.number}</strong><span class="card-date">${date.slice(5).replace('-', ' / ')}</span></div>
+    <div class="card-head">${!state.demo && safe`<input type="checkbox" data-select="${trip.id}" aria-label="选择 ${trip.number} ${date}" ${state.selection.has(trip.id) ? 'checked' : ''}/>`}<span class="mode-icon">${icon(trip.mode === 'train' ? 'train' : 'plane')}</span><strong>${trip.number}</strong><span class="card-date">${date.slice(5).replace('-', ' / ')}</span></div>
     <button class="card-view" data-view="${trip.id}" aria-label="查看 ${trip.number} ${trip.from.name} 至 ${trip.to.name}"><span class="card-route">${trip.from.name} <span>→</span> ${trip.to.name}</span><span class="card-time">${times}${trip.arrival && trip.arrival.slice(0, 10) !== date ? ` · 到达 ${trip.arrival.slice(5, 10)}` : ''}</span></button>
     <div class="station-summary">${trip.isReference ? `${trip.referenceDate} 时刻参考` : trip.source || '已知行程信息'}${issues.length ? ` · ${issues.length} 项说明` : ''}</div>
     <div class="card-meta"><span class="quality-badge ${warning ? 'warn' : ''}">${!playable ? '待补全 · ' : ''}${routeLabel(trip)}</span><span class="card-actions"><button class="text-button" data-detail="${trip.id}">详情</button>${!state.demo && safe`<button class="text-button" data-edit="${trip.id}" aria-label="编辑 ${trip.number}">编辑</button><button class="text-button" data-delete="${trip.id}" aria-label="删除 ${trip.number}">删除</button>`}</span></div>

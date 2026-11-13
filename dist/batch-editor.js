@@ -198,7 +198,7 @@ function renderRow(row) {
   details.open = row.expanded ?? rowNeedsReview(row);
   const draft = row.draft,
     title = draft
-      ? `${draft.mode === 'train' ? '🚄' : '✈'} ${draft.number}`
+      ? `${draft.mode === 'train' ? '火车' : '飞机'} ${draft.number}`
       : '待修正文本';
   details.innerHTML = safe`<summary><label><input data-include type="checkbox" ${row.included ? 'checked' : ''} aria-label="选择第 ${row.line} 行">${title}</label><span class="batch-route-summary">${draft ? `${draft.date || ''} · ${draft.from || '起点待补'} → ${draft.to || '终点待补'}` : `第 ${row.line} 行`}</span><span class="batch-state">${row.duplicate ? '重复' : row.running ? '匹配中' : rowPending(row) ? '待补全' : row.reviewed ? '已核对' : rowNeedsReview(row) ? '需核对' : '可保存'}</span></summary><div class="batch-row-body"><span class="batch-original">${row.raw}</span><div class="batch-row-actions"><button type="button" data-retry>${draft ? '重新匹配' : '重新识别'}</button><button type="button" data-reviewed ${draft ? '' : 'disabled'}>${row.reviewed ? '重新核对' : '已完成核对'}</button></div></div>`;
   const body = details.querySelector('.batch-row-body');
